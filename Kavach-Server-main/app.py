@@ -1,121 +1,436 @@
+"""
+app.py  —  Kavach Server
+Enhanced Flask API with:
+  • POST /api/alerts     — receive encrypted telemetry + evidence files
+  • GET  /api/health     — server + database health check
+  • GET  /api/alerts     — list all alerts (for future dashboard)
+  • GET  /api/alerts/<id>— single alert detail with hash verification status
+  • GET  /uploads/<file> — serve evidence files
+
+New in this version:
+  ✓ SHA-256 hash verification on uploaded evidence files
+  ✓ trigger_source and alert_type stored per alert
+  ✓ alert_type stored per alert
+  ✓ GET /api/health endpoint
+  ✓ GET /api/alerts listing endpoint
+  ✓ Structured JSON logging (replaces raw print statements)
+  ✓ Request ID on every response for tracing
+"""
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+
 import os
-from database import DB, Alert
-from utils import save_file_safe
-import sys # Added to flush output immediately
+import sys
 import json
 import base64
+import hashlib
+import logging
+import datetime
+import uuid
+
+from database import DB, Alert
+from utils import save_file_safe, compute_sha256, verify_file_hash
 from crypto_utils import chacha_decrypt_text
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging — structured, goes to stdout (visible in server terminal)
+# ─────────────────────────────────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("kavach.server")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# App setup
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 CORS(app)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///kavach.db'
+app.config['SQLALCHEMY_DATABASE_URI']    = 'sqlite:///kavach.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024 
+app.config['MAX_CONTENT_LENGTH']         = 64 * 1024 * 1024  # 64 MB max upload
 
 DB.init_app(app)
 
 UPLOAD_DIR = os.path.join(os.getcwd(), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Boot time — used in /api/health uptime calculation
+_SERVER_START_TIME = datetime.datetime.now(datetime.UTC)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper: generate a short request ID for tracing
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _request_id() -> str:
+    return uuid.uuid4().hex[:8].upper()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/alerts
+# Receives encrypted telemetry payload + optional evidence files from device.
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.route('/api/alerts', methods=['POST'])
-def alerts():
+def receive_alert():
+    rid = _request_id()
+    logger.info("[%s] POST /api/alerts — new request", rid)
+
     try:
-        files = request.files
+        # ── 1. Read and decode encrypted payload ─────────────────────────────
         encrypted_payload_b64 = request.form.get('encrypted_payload')
-
         if not encrypted_payload_b64:
-            return jsonify({'status': 'error', 'message': 'Missing encrypted payload'}), 400
+            logger.warning("[%s] Missing encrypted_payload field.", rid)
+            return jsonify({'status': 'error', 'message': 'Missing encrypted payload',
+                            'request_id': rid}), 400
 
-        # Decode base64 → bytes
         encrypted_payload = base64.b64decode(encrypted_payload_b64)
 
-        # --- [ENCRYPTION CHECK] START ---
-        print("\n" + "*"*50)
-        print(" [SECURITY CHECK] RAW ENCRYPTED PAYLOAD (First 50 bytes):")
-        print(f" {encrypted_payload[:50]}") 
-        print("*"*50 + "\n")
-        # --- [ENCRYPTION CHECK] END ---
+        logger.info("[%s] Encrypted payload received: %d bytes  first_10=%s",
+                    rid, len(encrypted_payload),
+                    encrypted_payload[:10].hex())
 
-        # Decrypt
+        # ── 2. Decrypt with ChaCha20-Poly1305 ────────────────────────────────
         decrypted_json = chacha_decrypt_text(encrypted_payload)
-
-        # Convert back to dict
         data = json.loads(decrypted_json)
 
-        
-        # --- [SERVER DEBUG LOG] START ---
-        print("\n" + "="*50)
-        print(" [SERVER LOG] RECEIVED NEW POST REQUEST")
-        print("="*50)
-        print(f" Device ID:      {data.get('device_id')}")
-        print(f" Timestamp:      {data.get('timestamp')}")
-        
-        rec_loc = data.get('location') or data.get('gps_location')
-        print(f" GPS Location:   {rec_loc}") 
-        
-        # --- NEW DEBUG LINE ---
-        print(f" Battery %:      {data.get('battery_percentage')}")
-        
-        print(f" Call Status:    {data.get('call_placed_status')}")
-        print(f" SMS Status:     {data.get('guardian_sms_status')}")
-        print(f" Files Received: {list(files.keys())}")
-        print("="*50 + "\n")
-        sys.stdout.flush() # Force print to terminal immediately
-        # --- [SERVER DEBUG LOG] END ---
+        # ── 3. Log decrypted fields ───────────────────────────────────────────
+        logger.info(
+            "[%s] Decrypted alert — device=%s  type=%s  trigger=%s  "
+            "gps=%s  battery=%s  call=%s  sms=%s",
+            rid,
+            data.get('device_id'),
+            data.get('alert_type', 'N/A'),
+            data.get('trigger_source', 'N/A'),
+            data.get('gps_location') or data.get('location', 'N/A'),
+            data.get('battery_percentage', 'N/A'),
+            data.get('call_placed_status'),
+            data.get('guardian_sms_status'),
+        )
 
+        # ── 4. Validate required fields ───────────────────────────────────────
         device_id = data.get('device_id')
         if not device_id:
-            print(" [ERROR] device_id missing")
-            return jsonify({'status':'error', 'message':'device_id is required'}), 400
+            logger.error("[%s] device_id missing from payload.", rid)
+            return jsonify({'status': 'error', 'message': 'device_id is required',
+                            'request_id': rid}), 400
 
+        # ── 5. Save uploaded evidence files + verify SHA-256 hashes ──────────
+        files          = request.files
         saved_filenames = []
-        
-        for name in files:
-            f = files[name]
-            path = save_file_safe(f, UPLOAD_DIR)
-            if path:
-                print(f" [SERVER LOG] Saved file: {os.path.basename(path)}")
-                saved_filenames.append(os.path.basename(path))
-        
-        location_data = data.get('location')
-        if not location_data:
-            location_data = data.get('gps_location')
-            
-        # --- NEW: Get battery data ---
-        battery_data = data.get('battery_percentage')
+        hash_results   = {}   # filename → {"expected": str, "computed": str, "verified": bool}
 
+        for field_name in files:
+            f    = files[field_name]
+            path = save_file_safe(f, UPLOAD_DIR)
+            if not path:
+                logger.warning("[%s] Could not save file: %s", rid, field_name)
+                continue
+
+            fname = os.path.basename(path)
+            saved_filenames.append(fname)
+            logger.info("[%s] Saved evidence file: %s", rid, fname)
+
+            # Compute the actual SHA-256 of the saved file
+            computed_hash = compute_sha256(path)
+
+            # Check if device sent a hash for this file
+            # Convention: device sends hash as form field "<filename>_sha256"
+            hash_field   = field_name + '_sha256'
+            expected_hash = request.form.get(hash_field, '').strip().lower()
+
+            if expected_hash:
+                verified = (computed_hash == expected_hash)
+                hash_results[fname] = {
+                    "expected": expected_hash,
+                    "computed": computed_hash,
+                    "verified": verified,
+                }
+                if verified:
+                    logger.info(
+                        "[%s] Hash VERIFIED for %s: %s", rid, fname, computed_hash[:16] + "..."
+                    )
+                else:
+                    logger.warning(
+                        "[%s] Hash MISMATCH for %s! "
+                        "expected=%s  computed=%s",
+                        rid, fname,
+                        expected_hash[:16] + "...",
+                        computed_hash[:16] + "..."
+                    )
+            else:
+                # No hash provided by device — store what we computed for audit
+                hash_results[fname] = {
+                    "expected": None,
+                    "computed": computed_hash,
+                    "verified": None,   # None = not checked
+                }
+                logger.info(
+                    "[%s] No hash provided for %s — computed and stored: %s",
+                    rid, fname, computed_hash[:16] + "..."
+                )
+
+        # ── 6. Build hash summary string for DB storage ───────────────────────
+        # Format: "filename:hash,filename:hash"  stored in file_hashes column
+        hash_summary = ",".join(
+            f"{fname}:{info['computed']}"
+            for fname, info in hash_results.items()
+        )
+
+        # ── 7. Resolve GPS location field (device may use either key) ─────────
+        location_data = data.get('gps_location') or data.get('location')
+
+        # ── 8. Write to database ──────────────────────────────────────────────
         new_alert = Alert(
             device_id=device_id,
-            # Wrap in str() to handle both boolean (True) and string ("True") data safely
+            timestamp=datetime.datetime.now(datetime.UTC),
+            alert_type=data.get('alert_type'),
+            trigger_source=data.get('trigger_source'),
             call_placed_status=str(data.get('call_placed_status', 'false')).lower() == 'true',
             guardian_sms_status=str(data.get('guardian_sms_status', 'false')).lower() == 'true',
             location_sms_status=str(data.get('location_sms_status', 'false')).lower() == 'true',
             gps_location=location_data,
             battery_percentage=data.get('battery_percentage'),
-            uploaded_files=','.join(saved_filenames)
+            uploaded_files=','.join(saved_filenames),
+            file_hashes=hash_summary or None,
         )
-        
+
         DB.session.add(new_alert)
         DB.session.commit()
-        
-        print(f" [SERVER LOG] Alert saved to DB with ID: {new_alert.id}")
-        return jsonify({'status':'ok', 'saved': saved_filenames, 'alert_id': new_alert.id}), 201
 
-    except Exception as e:
-        print(f" [SERVER ERROR] {str(e)}")
+        logger.info("[%s] Alert saved to DB — id=%d", rid, new_alert.id)
+
+        # ── 9. Build response ─────────────────────────────────────────────────
+        response = {
+            'status':      'ok',
+            'request_id':  rid,
+            'alert_id':    new_alert.id,
+            'saved_files': saved_filenames,
+            'hash_results': hash_results,
+        }
+        return jsonify(response), 201
+
+    except Exception as exc:
+        logger.error("[%s] Unhandled exception: %s", rid, exc, exc_info=True)
         DB.session.rollback()
-        return jsonify({'status':'error', 'message': str(e)}), 500
+        return jsonify({
+            'status':     'error',
+            'message':    str(exc),
+            'request_id': rid,
+        }), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/health
+# Returns server status, uptime, and database stats.
+# Used by the device (comms.py) to ping connectivity, and by the future
+# web dashboard to show a status indicator.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    try:
+        # Count total alerts and check DB is reachable
+        total_alerts  = Alert.query.count()
+        latest_alert  = Alert.query.order_by(Alert.id.desc()).first()
+        latest_id     = latest_alert.id if latest_alert else None
+        latest_device = latest_alert.device_id if latest_alert else None
+        latest_time   = (
+            latest_alert.timestamp.isoformat() if latest_alert and latest_alert.timestamp
+            else None
+        )
+
+        uptime_seconds = int(
+            (datetime.datetime.now(datetime.UTC) - _SERVER_START_TIME).total_seconds()
+        )
+
+        return jsonify({
+            'status':           'ok',
+            'server':           'Kavach API',
+            'version':          '2.0',
+            'uptime_seconds':   uptime_seconds,
+            'uptime_human':     _format_uptime(uptime_seconds),
+            'database': {
+                'status':         'connected',
+                'total_alerts':   total_alerts,
+                'latest_alert_id':     latest_id,
+                'latest_alert_device': latest_device,
+                'latest_alert_time':   latest_time,
+            },
+            'upload_dir':       UPLOAD_DIR,
+            'upload_dir_exists': os.path.isdir(UPLOAD_DIR),
+        }), 200
+
+    except Exception as exc:
+        logger.error("Health check failed: %s", exc, exc_info=True)
+        return jsonify({
+            'status':  'error',
+            'message': str(exc),
+        }), 500
+
+
+def _format_uptime(seconds: int) -> str:
+    """Convert seconds to human-readable string e.g. '2d 3h 15m 40s'."""
+    d, rem  = divmod(seconds, 86400)
+    h, rem  = divmod(rem, 3600)
+    m, s    = divmod(rem, 60)
+    parts   = []
+    if d: parts.append(f"{d}d")
+    if h: parts.append(f"{h}h")
+    if m: parts.append(f"{m}m")
+    parts.append(f"{s}s")
+    return ' '.join(parts)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/alerts
+# Returns a list of all alerts, newest first.
+# Optional query params:
+#   ?device_id=KAVACH-001   — filter by device
+#   ?limit=20               — cap results (default 50)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/alerts', methods=['GET'])
+def list_alerts():
+    try:
+        device_id = request.args.get('device_id')
+        limit     = min(int(request.args.get('limit', 50)), 200)
+
+        query = Alert.query.order_by(Alert.id.desc())
+        if device_id:
+            query = query.filter_by(device_id=device_id)
+        alerts = query.limit(limit).all()
+
+        return jsonify({
+            'status': 'ok',
+            'count':  len(alerts),
+            'alerts': [_alert_to_dict(a) for a in alerts],
+        }), 200
+
+    except Exception as exc:
+        logger.error("List alerts failed: %s", exc, exc_info=True)
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /api/alerts/<int:alert_id>
+# Returns full detail for one alert, including hash verification status
+# for each uploaded evidence file.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/alerts/<int:alert_id>', methods=['GET'])
+def get_alert(alert_id: int):
+    try:
+        alert = Alert.query.get(alert_id)
+        if not alert:
+            return jsonify({'status': 'error', 'message': 'Alert not found'}), 404
+
+        data = _alert_to_dict(alert)
+
+        # Re-verify hashes live against files on disk
+        evidence_verification = []
+        if alert.uploaded_files:
+            stored_hashes = {}
+            if alert.file_hashes:
+                for entry in alert.file_hashes.split(','):
+                    if ':' in entry:
+                        fname, fhash = entry.split(':', 1)
+                        stored_hashes[fname.strip()] = fhash.strip()
+
+            for fname in alert.uploaded_files.split(','):
+                fname = fname.strip()
+                if not fname:
+                    continue
+                fpath = os.path.join(UPLOAD_DIR, fname)
+                if not os.path.exists(fpath):
+                    evidence_verification.append({
+                        'filename':  fname,
+                        'file_exists': False,
+                        'verified':  False,
+                        'reason':    'File not found on disk',
+                    })
+                    continue
+
+                current_hash  = compute_sha256(fpath)
+                stored_hash   = stored_hashes.get(fname)
+                verified      = (current_hash == stored_hash) if stored_hash else None
+                file_size     = os.path.getsize(fpath)
+                public_url    = f"/uploads/{fname}"
+
+                evidence_verification.append({
+                    'filename':      fname,
+                    'file_exists':   True,
+                    'file_size_bytes': file_size,
+                    'public_url':    public_url,
+                    'stored_hash':   stored_hash,
+                    'current_hash':  current_hash,
+                    'verified':      verified,
+                    'integrity':     (
+                        'verified' if verified is True
+                        else 'tampered' if verified is False
+                        else 'not_checked'
+                    ),
+                })
+
+        data['evidence'] = evidence_verification
+        return jsonify({'status': 'ok', 'alert': data}), 200
+
+    except Exception as exc:
+        logger.error("Get alert %d failed: %s", alert_id, exc, exc_info=True)
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+def _alert_to_dict(alert: Alert) -> dict:
+    """Serialise an Alert model instance to a plain dict."""
+    return {
+        'id':                   alert.id,
+        'device_id':            alert.device_id,
+        'timestamp':            alert.timestamp.isoformat() if alert.timestamp else None,
+        'alert_type':           alert.alert_type,
+        'trigger_source':       alert.trigger_source,
+        'call_placed_status':   alert.call_placed_status,
+        'guardian_sms_status':  alert.guardian_sms_status,
+        'location_sms_status':  alert.location_sms_status,
+        'gps_location':         alert.gps_location,
+        'battery_percentage':   alert.battery_percentage,
+        'uploaded_files':       alert.uploaded_files,
+        'file_hashes':          alert.file_hashes,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /uploads/<filename>
+# Serve evidence files (video clips, images, placeholder text files).
+# ─────────────────────────────────────────────────────────────────────────────
 
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_DIR, filename)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Boot
+# ─────────────────────────────────────────────────────────────────────────────
+
 if __name__ == '__main__':
     with app.app_context():
-        # This will see the new column and add it
-        DB.create_all() 
+        DB.create_all()
+        logger.info("=" * 55)
+        logger.info("  Kavach Server v2.0 starting")
+        logger.info("  Database:    kavach.db")
+        logger.info("  Upload dir:  %s", UPLOAD_DIR)
+        logger.info("  Endpoints:")
+        logger.info("    POST /api/alerts        — receive telemetry")
+        logger.info("    GET  /api/alerts        — list all alerts")
+        logger.info("    GET  /api/alerts/<id>   — alert detail + hash check")
+        logger.info("    GET  /api/health        — server health")
+        logger.info("    GET  /uploads/<file>    — serve evidence")
+        logger.info("=" * 55)
     app.run(host='0.0.0.0', port=8080, debug=True)
