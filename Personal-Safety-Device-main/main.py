@@ -1,30 +1,21 @@
 """
 main.py  —  Project Kavach
-The clean entry point. All alert logic lives in alerts.py.
-All button timing logic lives in hardware/button.py.
-All sensor logic lives in hardware/sensors.py.
-
-What this file does:
-  1. Sets up logging
-  2. Initialises SensorManager (IMU + heart rate)
-  3. Initialises ButtonHandler (single / double / long press)
-  4. Starts IMU and heart rate monitor threads
-  5. Sleeps indefinitely — all work happens in daemon threads
+Complete entry point with button + sensors + audio keyword detection.
 """
 
 import signal
 import threading
 import time
 import logging
+import json
 from sqlalchemy import create_engine
 from database import Alert, Base
 
-# ── Project modules ───────────────────────────────────────────────────────────
 from hardware.button  import ButtonHandler
 from hardware.sensors import SensorManager
+from hardware.audio   import AudioManager          # ← ADD
 from alerts import sos_sequence, medical_sequence, safe_sequence
 
-# ── Logging setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -32,22 +23,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kavach.main")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Config
-# ─────────────────────────────────────────────────────────────────────────────
-
-import json
 
 def load_config() -> dict:
     with open('config.json', 'r') as f:
         return json.load(f)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Sensor monitor threads
+# Sensor monitor threads (unchanged from before)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _imu_monitor(sensor_manager: SensorManager) -> None:
-    """Background thread: reads IMU at 10 Hz, fires SOS on fall detection."""
     logger.info("[IMU] Monitor thread started.")
     while True:
         try:
@@ -65,7 +51,6 @@ def _imu_monitor(sensor_manager: SensorManager) -> None:
 
 
 def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
-    """Background thread: reads heart rate every 5 s, fires SOS on distress."""
     logger.info("[HeartRate] Monitor thread started.")
     while True:
         try:
@@ -85,26 +70,37 @@ def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Button callbacks — each spawns a daemon thread so the button poller
-# never blocks waiting for the SOS/medical/safe sequence to finish
+# Button callbacks (unchanged from before)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _on_sos():
-    """Single press → SOS."""
     logger.info("[Main] Button: SINGLE PRESS → SOS")
     threading.Thread(target=sos_sequence, kwargs={"trigger_source": "button_single"}, daemon=True).start()
 
-
 def _on_medical():
-    """Double press → Medical alert."""
     logger.info("[Main] Button: DOUBLE PRESS → MEDICAL ALERT")
     threading.Thread(target=medical_sequence, daemon=True).start()
 
-
 def _on_safe():
-    """Long press (5 s) → Safe / cancel alert."""
     logger.info("[Main] Button: LONG PRESS → SAFE ALERT")
     threading.Thread(target=safe_sequence, daemon=True).start()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audio keyword callback                                        ← ADD THIS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _on_keyword_detected(keyword: str, confidence: float) -> None:
+    """Called by AudioManager when a trigger keyword is heard."""
+    logger.warning(
+        "[Main] Audio keyword '%s' detected (%.0f%%) → SOS",
+        keyword, confidence * 100
+    )
+    threading.Thread(
+        target=sos_sequence,
+        kwargs={"trigger_source": f"audio_{keyword}"},
+        daemon=True
+    ).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -114,19 +110,19 @@ def _on_safe():
 if __name__ == "__main__":
     logger.info("=== Kavach device starting ===")
 
-    # 1. Database init
+    # 1. Database
     engine = create_engine('sqlite:///alerts.db')
     Base.metadata.create_all(engine)
     logger.info("[DB] alerts.db ready.")
 
     config = load_config()
 
-    # 2. Sensor manager (auto-detects real vs fake hardware)
+    # 2. Sensors
     sensor_manager = SensorManager()
     sensor_manager.start()
     logger.info("[Sensors] %s", sensor_manager.status_string())
 
-    # 3. Button handler
+    # 3. Button
     button = ButtonHandler(
         pin=config['sos_button_pin'],
         on_sos_press=_on_sos,
@@ -135,16 +131,21 @@ if __name__ == "__main__":
     )
     button.start()
 
-    # 4. Sensor monitor threads
+    # 4. Audio keyword detection                                ← ADD
+    audio_manager = AudioManager()
+    audio_manager.start(on_keyword_detected=_on_keyword_detected)
+    logger.info("[Audio] %s", audio_manager.status_string())
+
+    # 5. Sensor monitor threads
     threading.Thread(target=_imu_monitor,        args=(sensor_manager,), daemon=True).start()
     threading.Thread(target=_heart_rate_monitor, args=(sensor_manager,), daemon=True).start()
 
     logger.info("=== Kavach ARMED — waiting for trigger ===")
-    logger.info("    Single press  → SOS (calls police + SMS guardian)")
-    logger.info("    Double press  → MEDICAL ALERT (calls ambulance + SMS medical contact)")
-    logger.info("    Long press 5s → SAFE (cancels alert, notifies guardian)")
+    logger.info("    Single press   → SOS")
+    logger.info("    Double press   → MEDICAL ALERT")
+    logger.info("    Long press 5s  → SAFE")
+    logger.info("    Say 'help'     → SOS (audio trigger)")
 
-    # 5. Wait forever — all work is in daemon threads
     try:
         signal.pause()
     except KeyboardInterrupt:
@@ -152,4 +153,5 @@ if __name__ == "__main__":
     finally:
         button.stop()
         sensor_manager.stop()
+        audio_manager.stop()
         logger.info("=== Kavach shutdown complete ===")
