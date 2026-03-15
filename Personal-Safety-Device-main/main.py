@@ -1,6 +1,6 @@
 """
 main.py  —  Project Kavach
-Complete entry point with button + sensors + audio keyword detection.
+Complete entry point with button + sensors + audio sound detection.
 """
 
 import signal
@@ -13,7 +13,7 @@ from database import Alert, Base
 
 from hardware.button  import ButtonHandler
 from hardware.sensors import SensorManager
-from hardware.audio   import AudioManager          # ← ADD
+from hardware.audio   import AudioManager, DetectionEvent
 from alerts import sos_sequence, medical_sequence, safe_sequence
 
 logging.basicConfig(
@@ -30,10 +30,11 @@ def load_config() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sensor monitor threads (unchanged from before)
+# Sensor monitor threads
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _imu_monitor(sensor_manager: SensorManager) -> None:
+    """Background thread: reads IMU at 10 Hz, fires SOS on fall detection."""
     logger.info("[IMU] Monitor thread started.")
     while True:
         try:
@@ -51,6 +52,7 @@ def _imu_monitor(sensor_manager: SensorManager) -> None:
 
 
 def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
+    """Background thread: reads heart rate every 5 s, fires SOS on distress."""
     logger.info("[HeartRate] Monitor thread started.")
     while True:
         try:
@@ -70,37 +72,59 @@ def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Button callbacks (unchanged from before)
+# Button callbacks
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _on_sos():
+    """Single press → SOS."""
     logger.info("[Main] Button: SINGLE PRESS → SOS")
-    threading.Thread(target=sos_sequence, kwargs={"trigger_source": "button_single"}, daemon=True).start()
+    threading.Thread(
+        target=sos_sequence,
+        kwargs={"trigger_source": "button_single"},
+        daemon=True
+    ).start()
+
 
 def _on_medical():
+    """Double press → Medical alert."""
     logger.info("[Main] Button: DOUBLE PRESS → MEDICAL ALERT")
     threading.Thread(target=medical_sequence, daemon=True).start()
 
+
 def _on_safe():
+    """Long press (5 s) → Safe / cancel alert."""
     logger.info("[Main] Button: LONG PRESS → SAFE ALERT")
     threading.Thread(target=safe_sequence, daemon=True).start()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Audio keyword callback                                        ← ADD THIS
+# Audio detection callback
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _on_keyword_detected(keyword: str, confidence: float) -> None:
-    """Called by AudioManager when a trigger keyword is heard."""
-    logger.warning(
-        "[Main] Audio keyword '%s' detected (%.0f%%) → SOS",
-        keyword, confidence * 100
-    )
-    threading.Thread(
-        target=sos_sequence,
-        kwargs={"trigger_source": f"audio_{keyword}"},
-        daemon=True
-    ).start()
+def _on_audio_detection(event: DetectionEvent) -> None:
+    """
+    Called by AudioManager when a danger sound is detected.
+    event.sound_class  = e.g. "Screaming", "Gunshot, gunfire", "Smash, crash"
+    event.category     = "distress" | "weapon" | "impact" | "fire"
+    event.confidence   = 0.0 – 1.0
+    event.should_trigger_sos = True if category is in SOS_TRIGGER_CATEGORIES
+    """
+    if event.should_trigger_sos:
+        logger.warning(
+            "[Main] Audio danger detected: '%s' (%s, %.0f%%) → SOS",
+            event.sound_class, event.category, event.confidence * 100
+        )
+        threading.Thread(
+            target=sos_sequence,
+            kwargs={"trigger_source": f"audio_{event.sound_class.replace(' ', '_').replace(',', '')}"},
+            daemon=True
+        ).start()
+    else:
+        # Detected but below trigger threshold — log only
+        logger.info(
+            "[Main] Audio event (no trigger): '%s' (%s, %.0f%%)",
+            event.sound_class, event.category, event.confidence * 100
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -110,19 +134,19 @@ def _on_keyword_detected(keyword: str, confidence: float) -> None:
 if __name__ == "__main__":
     logger.info("=== Kavach device starting ===")
 
-    # 1. Database
+    # 1. Database init
     engine = create_engine('sqlite:///alerts.db')
     Base.metadata.create_all(engine)
     logger.info("[DB] alerts.db ready.")
 
     config = load_config()
 
-    # 2. Sensors
+    # 2. Sensor manager (auto-detects real BNO055/MAX30102 vs fake)
     sensor_manager = SensorManager()
     sensor_manager.start()
     logger.info("[Sensors] %s", sensor_manager.status_string())
 
-    # 3. Button
+    # 3. Button handler (single / double / long press)
     button = ButtonHandler(
         pin=config['sos_button_pin'],
         on_sos_press=_on_sos,
@@ -131,21 +155,32 @@ if __name__ == "__main__":
     )
     button.start()
 
-    # 4. Audio keyword detection                                ← ADD
+    # 4. Audio sound detection (YAMNet — real mic or fake simulation)
     audio_manager = AudioManager()
-    audio_manager.start(on_keyword_detected=_on_keyword_detected)
+    audio_manager.start(on_detection=_on_audio_detection)
     logger.info("[Audio] %s", audio_manager.status_string())
 
     # 5. Sensor monitor threads
-    threading.Thread(target=_imu_monitor,        args=(sensor_manager,), daemon=True).start()
-    threading.Thread(target=_heart_rate_monitor, args=(sensor_manager,), daemon=True).start()
+    threading.Thread(
+        target=_imu_monitor,
+        args=(sensor_manager,),
+        daemon=True
+    ).start()
+    threading.Thread(
+        target=_heart_rate_monitor,
+        args=(sensor_manager,),
+        daemon=True
+    ).start()
 
     logger.info("=== Kavach ARMED — waiting for trigger ===")
-    logger.info("    Single press   → SOS")
-    logger.info("    Double press   → MEDICAL ALERT")
-    logger.info("    Long press 5s  → SAFE")
-    logger.info("    Say 'help'     → SOS (audio trigger)")
+    logger.info("    Single press      → SOS (calls police + SMS guardian)")
+    logger.info("    Double press      → MEDICAL ALERT (calls ambulance)")
+    logger.info("    Long press 5s     → SAFE (cancels alert, notifies guardian)")
+    logger.info("    Scream/Gunshot    → SOS (audio detection)")
+    logger.info("    Fall detected     → SOS (IMU sensor)")
+    logger.info("    Heart rate spike  → SOS (pulse oximeter)")
 
+    # 6. Wait forever — all work happens in daemon threads
     try:
         signal.pause()
     except KeyboardInterrupt:
