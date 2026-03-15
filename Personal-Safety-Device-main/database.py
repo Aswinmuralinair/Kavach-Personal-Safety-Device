@@ -23,9 +23,12 @@ class Alert(Base):
     # --- NEW COLUMN ---
     battery_percentage = Column(String(10), nullable=True) # e.g., "93.0%" or "N/A"
     # ------------------
+    trigger_source      = Column(String(64), nullable=True)
+    alert_type          = Column(String(16), nullable=True)
 
     # To track uploaded files
     uploaded_files = Column(String(1024), nullable=True)
+    
 
     def __repr__(self):
         return f"<Alert(id={self.id}, device='{self.device_id}', time='{self.timestamp}')>"
