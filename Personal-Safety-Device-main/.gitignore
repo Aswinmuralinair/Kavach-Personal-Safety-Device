@@ -2,7 +2,7 @@
 *.db
 
 # Config with secrets
-config.json
+#config.json
 
 # Runtime evidence / uploads
 evidence_files/
