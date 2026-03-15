@@ -1,13 +1,24 @@
 """
-alerts.py  —  Project Kavach
+alerts.py — Project Kavach
+
 All three alert pipelines in one place.
 
-  sos_sequence()      → calls police, SMS guardian, GPS loop, evidence upload
-  medical_sequence()  → calls ambulance/medical contact, SMS "MEDICAL EMERGENCY" + GPS
-  safe_sequence()     → SMS "I AM SAFE" to guardian, cancels any active SOS loop
+    sos_sequence()     → calls police, SMS guardian, GPS loop, evidence upload
+    medical_sequence() → calls ambulance/medical contact, SMS "MEDICAL EMERGENCY" + GPS
+    safe_sequence()    → SMS "I AM SAFE" to guardian, cancels any active SOS loop
 
-Each function is designed to be run in its own daemon thread so it never
-blocks the button polling loop.
+FIX applied (serial port conflict):
+    Previously each function created its own SIM7600(port=...) instance, which
+    caused an OSError: [Errno 16] Device or resource busy when safe_sequence()
+    tried to open the same /dev/ttyUSB2 that sos_sequence() already held.
+
+    Now every function accepts `sim: SIM7600` as its FIRST argument.
+    A single shared instance is created once at boot in main.py and passed in.
+    This means the serial port is opened exactly once for the lifetime of the
+    device, and all sequences share it safely.
+
+    The duplicate _alert_lock / _active_alert_type state has also been removed —
+    KavachStateMachine in main.py is now the single source of truth for state.
 """
 
 import time
@@ -32,12 +43,19 @@ except (ImportError, FileNotFoundError):
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Global state — shared across all alert threads
+# Single module-level stop event — still needed so safe_sequence() can wake
+# the update loop across threads.  State ownership stays in KavachStateMachine.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_alert_lock         = threading.Lock()
-_active_alert_type  = None        # "sos" | "medical" | None
-_stop_alert_event   = threading.Event()   # set this to cancel the update loop
+_stop_alert_event = threading.Event()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared SQLAlchemy engine — created ONCE, not per call
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ENGINE = create_engine('sqlite:///alerts.db')
+Base.metadata.create_all(_ENGINE)
+_SessionFactory = sessionmaker(bind=_ENGINE)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,14 +68,12 @@ def _load_config() -> dict:
 
 
 def _get_db_session():
-    engine = create_engine('sqlite:///alerts.db')
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine)
-    return Session()
+    """Return a new Session backed by the shared engine."""
+    return _SessionFactory()
 
 
 def _ist_timestamp() -> str:
-    """Current time formatted for SMS in IST."""
+    """Current time formatted for SMS in IST (UTC+5:30)."""
     ist = timezone(timedelta(hours=5, minutes=30), name='IST')
     return datetime.now(ist).strftime("%d-%m-%Y %I:%M:%S %p")
 
@@ -72,7 +88,7 @@ def _build_maps_link(location: str) -> str:
         lat, lon = float(parts[0]), float(parts[1])
         return f"https://maps.google.com/?q={lat},{lon}"
     except Exception:
-        return location   # return raw string if parsing fails
+        return location  # return raw string if parsing fails
 
 
 def _init_power_monitor():
@@ -93,31 +109,31 @@ def _read_battery(power_monitor) -> str:
     if power_monitor is None:
         return "N/A"
     try:
-        v   = power_monitor.get_voltage_V()
+        v = power_monitor.get_voltage_V()
         pct = voltage_to_percentage(v)
         return f"{pct}%"
     except IOError:
         return "Error"
 
 
-def _create_dummy_evidence(path: str) -> None:
-    """Creates a placeholder file so the upload loop has something to send."""
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        f.write("Kavach evidence placeholder.")
-    logger.info("[Evidence] Created placeholder: %s", os.path.basename(path))
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared 60-second update loop (used by both SOS and medical sequences)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _run_update_loop(sim: SIM7600, config: dict, alert_row: Alert, session, power_monitor, alert_label: str) -> None:
+def _run_update_loop(
+    sim: SIM7600,
+    config: dict,
+    alert_row: Alert,
+    session,
+    power_monitor,
+    alert_label: str,
+    uploaded_files: set,          # ← tracks already-uploaded filenames (fix #2)
+) -> None:
     """
     Runs every 60 seconds until _stop_alert_event is set (safe button pressed).
-    Sends: GPS location SMS, battery SMS, uploads any evidence files.
+    Sends: GPS location SMS, battery SMS, uploads any NEW evidence files.
 
-    alert_label: "SOS" or "MEDICAL" — used in SMS text.
+    The `uploaded_files` set prevents the same file being re-sent every cycle.
     """
     logger.info("[%s] Update loop started.", alert_label)
 
@@ -131,7 +147,7 @@ def _run_update_loop(sim: SIM7600, config: dict, alert_row: Alert, session, powe
 
         # 2. GPS
         location = sim.get_gps_location()
-        ts        = _ist_timestamp()
+        ts = _ist_timestamp()
         if location:
             maps_link = _build_maps_link(location)
             alert_row.gps_location = location
@@ -148,61 +164,62 @@ def _run_update_loop(sim: SIM7600, config: dict, alert_row: Alert, session, powe
         # 3. Commit GPS + battery to DB
         session.commit()
 
-        # 4. Evidence upload
+        # 4. Evidence upload — only files NOT already uploaded this session
         evidence_dir = config.get('evidence_dir', 'evidence')
         try:
-            files = [
+            all_files = [
                 f for f in os.listdir(evidence_dir)
                 if os.path.isfile(os.path.join(evidence_dir, f))
+                and not f.endswith('.txt')           # skip placeholder text files
             ]
-            for file_name in files:
+            new_files = [f for f in all_files if f not in uploaded_files]
+
+            for file_name in new_files:
                 file_path = os.path.join(evidence_dir, file_name)
                 success, uploaded_filename = sim.upload_alert(
                     config['server_url'], alert_row, file_path
                 )
                 if success:
+                    uploaded_files.add(file_name)    # mark as done — never re-send
                     file_link = config['server_public_url'] + uploaded_filename
                     sim.send_sms(
                         config['guardian_number'],
                         f"[Kavach {alert_label}] Evidence: {file_link}"
                     )
-                    alert_row.uploaded_files = (alert_row.uploaded_files or "") + uploaded_filename + ","
+                    alert_row.uploaded_files = (
+                        (alert_row.uploaded_files or "") + uploaded_filename + ","
+                    )
                     session.commit()
                     logger.info("[%s] Uploaded: %s", alert_label, file_name)
+
         except Exception as exc:
             logger.error("[%s] Evidence upload error: %s", alert_label, exc)
 
-        # Wait 60 s — but wake immediately if safe button is pressed
+        # Wait 60 s — wakes immediately if safe button is pressed
         _stop_alert_event.wait(timeout=60)
 
     logger.info("[%s] Update loop stopped (safe event received).", alert_label)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. SOS SEQUENCE  (single button press)
+# 1. SOS SEQUENCE (single button press / fall / heartrate / audio trigger)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def sos_sequence(trigger_source: str = "button") -> None:
+def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
     """
     Full SOS pipeline:
       1. Calls police (config['police_number'])
       2. SMS guardian: "SOS ALERT" + Google Maps link
       3. Enters 60-second GPS + evidence upload loop until safe_sequence() fires
+
+    `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
     """
-    global _active_alert_type
-
-    with _alert_lock:
-        if _active_alert_type is not None:
-            logger.warning("[SOS] Ignored — %s alert already active.", _active_alert_type)
-            return
-        _active_alert_type = "sos"
-        _stop_alert_event.clear()
-
+    _stop_alert_event.clear()
     logger.info("[SOS] ACTIVATED — trigger: %s", trigger_source)
-    config        = _load_config()
-    sim           = SIM7600(port=config['serial_port'], baud=config['baud_rate'])
+
+    config = _load_config()
     power_monitor = _init_power_monitor()
-    session       = _get_db_session()
+    session = _get_db_session()
 
     alert_row = Alert(
         device_id=config['device_id'],
@@ -220,7 +237,7 @@ def sos_sequence(trigger_source: str = "button") -> None:
         time.sleep(15)
         sim.hang_up_call()
         alert_row.call_placed_status = True
-    session.commit()
+        session.commit()
 
     # ── Step 2: SMS guardian with initial SOS ─────────────────────────────────
     logger.info("[SOS] Step 2 — Sending initial SOS SMS to guardian.")
@@ -243,45 +260,47 @@ def sos_sequence(trigger_source: str = "button") -> None:
         )
         alert_row.location_sms_status = True
     else:
-        sim.send_sms(config['guardian_number'], "🚨 [SOS] GPS fix unavailable. Tracking started.")
+        sim.send_sms(
+            config['guardian_number'],
+            "🚨 [SOS] GPS fix unavailable. Tracking started."
+        )
     session.commit()
 
-    # ── Step 4: Create placeholder evidence + enter update loop ───────────────
-    _create_dummy_evidence(os.path.join(config.get('evidence_dir', 'evidence'), 'sos_placeholder.txt'))
-    _run_update_loop(sim, config, alert_row, session, power_monitor, alert_label="SOS")
+    # ── Step 4: Enter 60-second update loop ───────────────────────────────────
+    _run_update_loop(
+        sim=sim,
+        config=config,
+        alert_row=alert_row,
+        session=session,
+        power_monitor=power_monitor,
+        alert_label="SOS",
+        uploaded_files=set(),     # fresh set per alert session
+    )
 
     # Loop exited — clean up
-    with _alert_lock:
-        _active_alert_type = None
     session.close()
     logger.info("[SOS] Sequence ended.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. MEDICAL ALERT SEQUENCE  (double button press)
+# 2. MEDICAL ALERT SEQUENCE (double button press)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def medical_sequence() -> None:
+def medical_sequence(sim: SIM7600) -> None:
     """
     Medical emergency pipeline:
       1. Calls ambulance / medical contact (config['medical_number'])
       2. SMS guardian AND medical contact: "MEDICAL EMERGENCY" + Google Maps link
       3. Enters the same 60-second GPS + evidence upload loop, tagged "MEDICAL"
+
+    `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
     """
-    global _active_alert_type
-
-    with _alert_lock:
-        if _active_alert_type is not None:
-            logger.warning("[MEDICAL] Ignored — %s alert already active.", _active_alert_type)
-            return
-        _active_alert_type = "medical"
-        _stop_alert_event.clear()
-
+    _stop_alert_event.clear()
     logger.info("[MEDICAL] ACTIVATED — double press.")
-    config        = _load_config()
-    sim           = SIM7600(port=config['serial_port'], baud=config['baud_rate'])
+
+    config = _load_config()
     power_monitor = _init_power_monitor()
-    session       = _get_db_session()
+    session = _get_db_session()
 
     alert_row = Alert(
         device_id=config['device_id'],
@@ -300,16 +319,16 @@ def medical_sequence() -> None:
         time.sleep(15)
         sim.hang_up_call()
         alert_row.call_placed_status = True
-    session.commit()
+        session.commit()
 
     # ── Step 2: Immediate GPS fix ─────────────────────────────────────────────
     logger.info("[MEDICAL] Step 2 — Getting GPS fix.")
-    location  = sim.get_gps_location()
+    location = sim.get_gps_location()
     maps_link = _build_maps_link(location) if location else "GPS unavailable"
     if location:
-        alert_row.gps_location        = location
+        alert_row.gps_location = location
         alert_row.location_sms_status = True
-    session.commit()
+        session.commit()
 
     # ── Step 3: SMS guardian — MEDICAL EMERGENCY ──────────────────────────────
     logger.info("[MEDICAL] Step 3 — Sending MEDICAL EMERGENCY SMS to guardian.")
@@ -335,53 +354,52 @@ def medical_sequence() -> None:
         )
         sim.send_sms(config['medical_number'], medical_msg)
 
-    # ── Step 5: Create placeholder evidence + enter update loop ───────────────
-    _create_dummy_evidence(
-        os.path.join(config.get('evidence_dir', 'evidence'), 'medical_placeholder.txt')
+    # ── Step 5: Enter 60-second update loop ───────────────────────────────────
+    _run_update_loop(
+        sim=sim,
+        config=config,
+        alert_row=alert_row,
+        session=session,
+        power_monitor=power_monitor,
+        alert_label="MEDICAL",
+        uploaded_files=set(),
     )
-    _run_update_loop(sim, config, alert_row, session, power_monitor, alert_label="MEDICAL")
 
     # Loop exited — clean up
-    with _alert_lock:
-        _active_alert_type = None
     session.close()
     logger.info("[MEDICAL] Sequence ended.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. SAFE SEQUENCE  (long press ≥ 5 seconds)
+# 3. SAFE SEQUENCE (long press ≥ 5 seconds)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def safe_sequence() -> None:
+def safe_sequence(sim: SIM7600, was_active_type: str = None) -> None:
     """
     'I am safe' pipeline:
-      - If an SOS or MEDICAL loop is running → stops it immediately
-      - SMS guardian: "I AM SAFE" confirmation message
-      - Resets device back to idle, waiting for next button press
+      - Stops the running SOS/MEDICAL loop immediately via _stop_alert_event
+      - SMS guardian: "I AM SAFE" confirmation
+      - SMS police cancellation if SOS was active (to prevent false response)
 
-    This is deliberately the ONLY way to cancel an active alert loop,
-    requiring a deliberate 5-second hold to prevent accidental cancellation.
+    `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
+    `was_active_type` is passed from KavachStateMachine so we know what to cancel.
     """
     logger.info("[SAFE] Long press detected — sending SAFE alert.")
+
     config = _load_config()
-    sim    = SIM7600(port=config['serial_port'], baud=config['baud_rate'])
 
     # ── Cancel any running alert loop ─────────────────────────────────────────
-    with _alert_lock:
-        was_active = _active_alert_type
-
-    if was_active:
-        logger.info("[SAFE] Cancelling active %s alert.", was_active.upper())
-        _stop_alert_event.set()   # wake + exit the update loop
-        # Give the loop up to 2 s to notice the event and exit cleanly
-        time.sleep(2)
+    if was_active_type:
+        logger.info("[SAFE] Cancelling active %s alert.", was_active_type.upper())
+        _stop_alert_event.set()   # wake + exit the update loop immediately
+        time.sleep(2)             # give the loop up to 2 s to exit cleanly
 
     # ── Build the SMS ─────────────────────────────────────────────────────────
     ts = _ist_timestamp()
-    if was_active:
+    if was_active_type:
         message = (
             f"✅ SAFE CONFIRMATION ✅\n"
-            f"The previous {was_active.upper()} alert has been CANCELLED.\n"
+            f"The previous {was_active_type.upper()} alert has been CANCELLED.\n"
             f"The user has confirmed they are safe.\n"
             f"Time: {ts}"
         )
@@ -396,8 +414,7 @@ def safe_sequence() -> None:
     sim.send_sms(config['guardian_number'], message)
     logger.info("[SAFE] Safe SMS sent to guardian.")
 
-    if was_active == "sos":
-        # Also notify police that the emergency is cancelled, to avoid false response
+    if was_active_type == "sos":
         cancel_msg = (
             f"KAVACH DEVICE — FALSE ALARM CANCEL\n"
             f"The SOS alert from this device at {ts} has been cancelled by the user. "
