@@ -3,21 +3,25 @@ alerts.py — Project Kavach
 
 All three alert pipelines in one place.
 
-    sos_sequence()     → calls police, SMS guardian, GPS loop, evidence upload
-    medical_sequence() → calls ambulance/medical contact, SMS "MEDICAL EMERGENCY" + GPS
-    safe_sequence()    → SMS "I AM SAFE" to guardian, cancels any active SOS loop
+  sos_sequence()     → calls police, SMS guardian, GPS loop, evidence upload
+  medical_sequence() → calls ambulance/medical contact, SMS "MEDICAL EMERGENCY" + GPS
+  safe_sequence()    → SMS "I AM SAFE" to guardian, cancels any active SOS loop
 
-FIX applied (serial port conflict):
-    Previously each function created its own SIM7600(port=...) instance, which
-    caused an OSError: [Errno 16] Device or resource busy when safe_sequence()
-    tried to open the same /dev/ttyUSB2 that sos_sequence() already held.
+FIXES APPLIED:
 
-    Now every function accepts `sim: SIM7600` as its FIRST argument.
+① Serial port conflict (original fix kept):
+    Every function accepts `sim: SIM7600` as its first argument.
     A single shared instance is created once at boot in main.py and passed in.
-    This means the serial port is opened exactly once for the lifetime of the
-    device, and all sequences share it safely.
 
-    The duplicate _alert_lock / _active_alert_type state has also been removed —
+② GPS double-URL bug:
+    comms.py:get_gps_location() now returns raw "lat,lon" coordinates, not a
+    full Google Maps URL.  The _build_maps_link() helper here correctly turns
+    those coordinates into a Maps URL.  Previously this caused the URL to be
+    re-processed as if it were a coordinate string, and the fallback silently
+    returned the raw URL — so the bug was invisible but data was wrong.
+
+③ Duplicate state removed:
+    The duplicate _alert_lock / _active_alert_type state has been removed.
     KavachStateMachine in main.py is now the single source of truth for state.
 """
 
@@ -26,8 +30,8 @@ import threading
 import os
 import json
 import logging
-from datetime import datetime, timezone, timedelta
 
+from datetime import datetime, timezone, timedelta
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -43,16 +47,14 @@ except (ImportError, FileNotFoundError):
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Single module-level stop event — still needed so safe_sequence() can wake
-# the update loop across threads.  State ownership stays in KavachStateMachine.
+# Single module-level stop event — used so safe_sequence() can wake the update
+# loop across threads.  State ownership stays in KavachStateMachine (main.py).
 # ─────────────────────────────────────────────────────────────────────────────
-
 _stop_alert_event = threading.Event()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared SQLAlchemy engine — created ONCE, not per call
 # ─────────────────────────────────────────────────────────────────────────────
-
 _ENGINE = create_engine('sqlite:///alerts.db')
 Base.metadata.create_all(_ENGINE)
 _SessionFactory = sessionmaker(bind=_ENGINE)
@@ -80,7 +82,9 @@ def _ist_timestamp() -> str:
 
 def _build_maps_link(location: str) -> str:
     """
-    Turns a raw GPS string (lat,lon or NMEA) into a Google Maps link.
+    Turns a raw GPS string "lat,lon" into a Google Maps link.
+
+    FIX ②: comms.py now returns raw "lat,lon" so this function works correctly.
     Falls back gracefully if the format is unexpected.
     """
     try:
@@ -88,7 +92,7 @@ def _build_maps_link(location: str) -> str:
         lat, lon = float(parts[0]), float(parts[1])
         return f"https://maps.google.com/?q={lat},{lon}"
     except Exception:
-        return location  # return raw string if parsing fails
+        return location   # return raw string if parsing fails
 
 
 def _init_power_monitor():
@@ -109,7 +113,7 @@ def _read_battery(power_monitor) -> str:
     if power_monitor is None:
         return "N/A"
     try:
-        v = power_monitor.get_voltage_V()
+        v   = power_monitor.get_voltage_V()
         pct = voltage_to_percentage(v)
         return f"{pct}%"
     except IOError:
@@ -127,13 +131,11 @@ def _run_update_loop(
     session,
     power_monitor,
     alert_label: str,
-    uploaded_files: set,          # ← tracks already-uploaded filenames (fix #2)
+    uploaded_files: set,      # tracks already-uploaded filenames (prevents re-upload)
 ) -> None:
     """
     Runs every 60 seconds until _stop_alert_event is set (safe button pressed).
     Sends: GPS location SMS, battery SMS, uploads any NEW evidence files.
-
-    The `uploaded_files` set prevents the same file being re-sent every cycle.
     """
     logger.info("[%s] Update loop started.", alert_label)
 
@@ -145,7 +147,7 @@ def _run_update_loop(
         alert_row.battery_percentage = battery_str
         sim.send_sms(config['guardian_number'], f"[Kavach {alert_label}] Battery: {battery_str}")
 
-        # 2. GPS
+        # 2. GPS — comms.py returns raw "lat,lon"; build the Maps link here
         location = sim.get_gps_location()
         ts = _ist_timestamp()
         if location:
@@ -170,7 +172,7 @@ def _run_update_loop(
             all_files = [
                 f for f in os.listdir(evidence_dir)
                 if os.path.isfile(os.path.join(evidence_dir, f))
-                and not f.endswith('.txt')           # skip placeholder text files
+                and not f.endswith('.txt')   # skip placeholder text files
             ]
             new_files = [f for f in all_files if f not in uploaded_files]
 
@@ -180,7 +182,7 @@ def _run_update_loop(
                     config['server_url'], alert_row, file_path
                 )
                 if success:
-                    uploaded_files.add(file_name)    # mark as done — never re-send
+                    uploaded_files.add(file_name)   # mark as done — never re-send
                     file_link = config['server_public_url'] + uploaded_filename
                     sim.send_sms(
                         config['guardian_number'],
@@ -191,7 +193,6 @@ def _run_update_loop(
                     )
                     session.commit()
                     logger.info("[%s] Uploaded: %s", alert_label, file_name)
-
         except Exception as exc:
             logger.error("[%s] Evidence upload error: %s", alert_label, exc)
 
@@ -202,7 +203,7 @@ def _run_update_loop(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. SOS SEQUENCE (single button press / fall / heartrate / audio trigger)
+# 1. SOS SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
@@ -217,16 +218,16 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
     _stop_alert_event.clear()
     logger.info("[SOS] ACTIVATED — trigger: %s", trigger_source)
 
-    config = _load_config()
+    config        = _load_config()
     power_monitor = _init_power_monitor()
-    session = _get_db_session()
+    session       = _get_db_session()
 
     alert_row = Alert(
-        device_id=config['device_id'],
-        timestamp=datetime.now(timezone.utc),
-        trigger_source=trigger_source,
-        alert_type="SOS",
-        battery_percentage="N/A" if not I2C_AVAILABLE else None,
+        device_id          = config['device_id'],
+        timestamp          = datetime.now(timezone.utc),
+        trigger_source     = trigger_source,
+        alert_type         = "SOS",
+        battery_percentage = "N/A" if not I2C_AVAILABLE else None,
     )
     session.add(alert_row)
     session.commit()
@@ -243,7 +244,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
     logger.info("[SOS] Step 2 — Sending initial SOS SMS to guardian.")
     sent = sim.send_sms(
         config['guardian_number'],
-        "🚨 SOS ALERT 🚨 Emergency triggered on Kavach device. Location SMS to follow."
+        "SOS ALERT - Emergency triggered on Kavach device. Location SMS to follow."
     )
     alert_row.guardian_sms_status = sent
     session.commit()
@@ -256,13 +257,13 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
         alert_row.gps_location = location
         sim.send_sms(
             config['guardian_number'],
-            f"🚨 [SOS] Last known location: {maps_link}"
+            f"[SOS] Last known location: {maps_link}"
         )
         alert_row.location_sms_status = True
     else:
         sim.send_sms(
             config['guardian_number'],
-            "🚨 [SOS] GPS fix unavailable. Tracking started."
+            "[SOS] GPS fix unavailable. Tracking started."
         )
     session.commit()
 
@@ -274,16 +275,15 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
         session=session,
         power_monitor=power_monitor,
         alert_label="SOS",
-        uploaded_files=set(),     # fresh set per alert session
+        uploaded_files=set(),   # fresh set per alert session
     )
 
-    # Loop exited — clean up
     session.close()
     logger.info("[SOS] Sequence ended.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. MEDICAL ALERT SEQUENCE (double button press)
+# 2. MEDICAL ALERT SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def medical_sequence(sim: SIM7600) -> None:
@@ -298,16 +298,16 @@ def medical_sequence(sim: SIM7600) -> None:
     _stop_alert_event.clear()
     logger.info("[MEDICAL] ACTIVATED — double press.")
 
-    config = _load_config()
+    config        = _load_config()
     power_monitor = _init_power_monitor()
-    session = _get_db_session()
+    session       = _get_db_session()
 
     alert_row = Alert(
-        device_id=config['device_id'],
-        timestamp=datetime.now(timezone.utc),
-        trigger_source="double_press",
-        alert_type="MEDICAL",
-        battery_percentage="N/A" if not I2C_AVAILABLE else None,
+        device_id          = config['device_id'],
+        timestamp          = datetime.now(timezone.utc),
+        trigger_source     = "double_press",
+        alert_type         = "MEDICAL",
+        battery_percentage = "N/A" if not I2C_AVAILABLE else None,
     )
     session.add(alert_row)
     session.commit()
@@ -323,17 +323,17 @@ def medical_sequence(sim: SIM7600) -> None:
 
     # ── Step 2: Immediate GPS fix ─────────────────────────────────────────────
     logger.info("[MEDICAL] Step 2 — Getting GPS fix.")
-    location = sim.get_gps_location()
+    location  = sim.get_gps_location()
     maps_link = _build_maps_link(location) if location else "GPS unavailable"
     if location:
-        alert_row.gps_location = location
+        alert_row.gps_location        = location
         alert_row.location_sms_status = True
         session.commit()
 
-    # ── Step 3: SMS guardian — MEDICAL EMERGENCY ──────────────────────────────
+    # ── Step 3: SMS guardian ──────────────────────────────────────────────────
     logger.info("[MEDICAL] Step 3 — Sending MEDICAL EMERGENCY SMS to guardian.")
     guardian_msg = (
-        f"🚑 MEDICAL EMERGENCY 🚑\n"
+        f"MEDICAL EMERGENCY\n"
         f"Kavach device has detected a medical emergency.\n"
         f"Location: {maps_link}\n"
         f"Time: {_ist_timestamp()}\n"
@@ -347,7 +347,7 @@ def medical_sequence(sim: SIM7600) -> None:
     if config.get('medical_number') and config['medical_number'] != config['guardian_number']:
         logger.info("[MEDICAL] Step 4 — Notifying medical contact by SMS.")
         medical_msg = (
-            f"🚑 MEDICAL EMERGENCY — KAVACH DEVICE ALERT 🚑\n"
+            f"MEDICAL EMERGENCY — KAVACH DEVICE ALERT\n"
             f"User requires immediate medical assistance.\n"
             f"Location: {maps_link}\n"
             f"Time: {_ist_timestamp()}"
@@ -365,13 +365,12 @@ def medical_sequence(sim: SIM7600) -> None:
         uploaded_files=set(),
     )
 
-    # Loop exited — clean up
     session.close()
     logger.info("[MEDICAL] Sequence ended.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. SAFE SEQUENCE (long press ≥ 5 seconds)
+# 3. SAFE SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
 def safe_sequence(sim: SIM7600, was_active_type: str = None) -> None:
@@ -385,7 +384,6 @@ def safe_sequence(sim: SIM7600, was_active_type: str = None) -> None:
     `was_active_type` is passed from KavachStateMachine so we know what to cancel.
     """
     logger.info("[SAFE] Long press detected — sending SAFE alert.")
-
     config = _load_config()
 
     # ── Cancel any running alert loop ─────────────────────────────────────────
@@ -398,14 +396,14 @@ def safe_sequence(sim: SIM7600, was_active_type: str = None) -> None:
     ts = _ist_timestamp()
     if was_active_type:
         message = (
-            f"✅ SAFE CONFIRMATION ✅\n"
+            f"SAFE CONFIRMATION\n"
             f"The previous {was_active_type.upper()} alert has been CANCELLED.\n"
             f"The user has confirmed they are safe.\n"
             f"Time: {ts}"
         )
     else:
         message = (
-            f"✅ SAFE CHECK-IN ✅\n"
+            f"SAFE CHECK-IN\n"
             f"The Kavach user has confirmed they are safe.\n"
             f"Time: {ts}"
         )

@@ -1,5 +1,9 @@
 SQLAlchemy>=1.4
 requests>=2.25
 pyserial>=3.5
+cryptography>=41.0
+numpy>=1.21
+sounddevice>=0.4
+tflite-runtime>=2.13
 RPi.GPIO
 smbus2

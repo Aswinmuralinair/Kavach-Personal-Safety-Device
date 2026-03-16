@@ -1,16 +1,19 @@
 """
-utils.py  —  Kavach Server
+utils.py — Kavach Server
+
 File saving and SHA-256 hash helpers.
 
-Changes from original:
-  + compute_sha256(path)            — compute hash of a file on disk
-  + verify_file_hash(path, expected) — compare computed hash against expected
+FIXES APPLIED:
+  - `str | None` return type replaced with `Optional[str]` for Python 3.9
+    compatibility (`X | Y` union syntax in annotations requires Python 3.10+).
 """
 
 import os
 import uuid
 import hashlib
 import logging
+from typing import Optional
+
 from werkzeug.utils import secure_filename
 
 logger = logging.getLogger(__name__)
@@ -25,7 +28,7 @@ ALLOWED_EXTENSIONS = {
 }
 
 
-def save_file_safe(file_obj, upload_dir: str) -> str | None:
+def save_file_safe(file_obj, upload_dir: str) -> Optional[str]:
     """
     Save an uploaded file to upload_dir safely.
 
@@ -54,12 +57,10 @@ def save_file_safe(file_obj, upload_dir: str) -> str | None:
     # multiple times (e.g. "evidence_sample.txt" from every device)
     unique_name = f"{uuid.uuid4().hex[:8]}_{original_name}"
     save_path   = os.path.join(upload_dir, unique_name)
-
     file_obj.save(save_path)
+
     file_size = os.path.getsize(save_path)
-    logger.info(
-        "[Utils] Saved: %s  (%d bytes)", unique_name, file_size
-    )
+    logger.info("[Utils] Saved: %s (%d bytes)", unique_name, file_size)
     return save_path
 
 
@@ -67,7 +68,7 @@ def compute_sha256(file_path: str) -> str:
     """
     Compute the SHA-256 hex digest of a file.
     Reads in 64 KB chunks — safe for large video files without RAM spike.
-    Returns the lowercase hex string (64 characters).
+    Returns the lowercase hex string (64 characters), or "" on error.
     """
     h = hashlib.sha256()
     try:
@@ -87,12 +88,10 @@ def compute_sha256(file_path: str) -> str:
 
 def verify_file_hash(file_path: str, expected_hash: str) -> bool:
     """
-    Verify the SHA-256 of file_path matches expected_hash.
-    Both compared lowercase for safety.
-
-    Returns True  if hashes match (file is intact).
-    Returns False if they differ (file may be corrupted or tampered).
-    Returns False if the file does not exist.
+    Verify the SHA-256 of file_path matches expected_hash (case-insensitive).
+    Returns True  — hashes match (file is intact).
+    Returns False — they differ (file may be corrupted or tampered).
+    Returns False — if the file does not exist.
     """
     if not os.path.exists(file_path):
         logger.warning("[Utils] verify_file_hash: file not found: %s", file_path)
@@ -104,9 +103,7 @@ def verify_file_hash(file_path: str, expected_hash: str) -> bool:
 
     match = computed.lower() == expected_hash.lower()
     if match:
-        logger.info(
-            "[Utils] Hash VERIFIED: %s", os.path.basename(file_path)
-        )
+        logger.info("[Utils] Hash VERIFIED: %s", os.path.basename(file_path))
     else:
         logger.warning(
             "[Utils] Hash MISMATCH: %s\n  expected: %s\n  computed: %s",

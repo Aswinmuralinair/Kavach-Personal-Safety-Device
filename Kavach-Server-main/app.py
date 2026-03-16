@@ -2,25 +2,23 @@
 app.py — Kavach Server
 
 Enhanced Flask API with:
-  • POST /api/alerts      — receive encrypted telemetry + evidence files
-  • GET  /api/health      — server + database health check
-  • GET  /api/alerts      — list all alerts (for future dashboard)
-  • GET  /api/alerts/<id> — single alert detail with hash verification status
-  • GET  /uploads/<file>  — serve evidence files
+  POST /api/alerts         — receive encrypted telemetry + evidence files
+  GET  /api/health         — server + database health check
+  GET  /api/alerts         — list all alerts (for future dashboard)
+  GET  /api/alerts/<id>    — single alert detail with hash verification status
+  GET  /uploads/<file>     — serve evidence files
 
-FIXES applied vs original:
+FIXES APPLIED:
   ① datetime.UTC → datetime.timezone.utc
-        datetime.UTC was only added in Python 3.11.
-        Raspberry Pi OS Bullseye ships Python 3.9; Bookworm ships 3.11 but
-        many deployments are still on Bullseye.
-        datetime.timezone.utc has existed since Python 3.2 — safe everywhere.
+      datetime.UTC was only added in Python 3.11.
+      datetime.timezone.utc has existed since Python 3.2 — safe everywhere.
 
   ② Alert.query.get(id) → db.session.get(Alert, id)
-        Query.get() was deprecated in SQLAlchemy 1.4 and fully REMOVED in 2.0.
-        A fresh `pip install flask-sqlalchemy` in 2024+ resolves to SQLAlchemy 2.x,
-        which raises AttributeError on every GET /api/alerts/<id> request.
-        db.session.get(Model, pk) is the correct 2.x API and is backwards-
-        compatible with SQLAlchemy 1.4 as well.
+      Query.get() was deprecated in SQLAlchemy 1.4 and REMOVED in 2.0.
+      db.session.get(Model, pk) is the correct 2.x API.
+
+  ③ Negative `limit` values now clamped to 1
+      ?limit=-1 previously bypassed the cap and dumped the entire table.
 """
 
 from flask import Flask, request, jsonify, send_from_directory
@@ -41,7 +39,6 @@ from crypto_utils import chacha_decrypt_text
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging — structured, goes to stdout (visible in server terminal)
 # ─────────────────────────────────────────────────────────────────────────────
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -53,13 +50,12 @@ logger = logging.getLogger("kavach.server")
 # ─────────────────────────────────────────────────────────────────────────────
 # App setup
 # ─────────────────────────────────────────────────────────────────────────────
-
 app = Flask(__name__)
 CORS(app)
 
 app.config['SQLALCHEMY_DATABASE_URI']        = 'sqlite:///kavach.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['MAX_CONTENT_LENGTH']             = 64 * 1024 * 1024  # 64 MB max upload
+app.config['MAX_CONTENT_LENGTH']             = 64 * 1024 * 1024   # 64 MB max upload
 
 DB.init_app(app)
 
@@ -67,28 +63,25 @@ UPLOAD_DIR = os.path.join(os.getcwd(), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX ①  — use datetime.timezone.utc everywhere instead of datetime.UTC
-#           datetime.UTC was only added in Python 3.11; timezone.utc works on 3.2+
+# FIX ① — use datetime.timezone.utc everywhere instead of datetime.UTC
+# datetime.UTC was only added in Python 3.11; timezone.utc works on 3.2+
 # ─────────────────────────────────────────────────────────────────────────────
-
-_UTC = datetime.timezone.utc                        # ← single alias used throughout
+_UTC = datetime.timezone.utc                                   # ← single alias
 
 # Boot time — used in /api/health uptime calculation
-_SERVER_START_TIME = datetime.datetime.now(_UTC)    # ← was datetime.UTC
+_SERVER_START_TIME = datetime.datetime.now(_UTC)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: generate a short request ID for tracing
 # ─────────────────────────────────────────────────────────────────────────────
-
 def _request_id() -> str:
     return uuid.uuid4().hex[:8].upper()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/alerts
-# Receives encrypted telemetry payload + optional evidence files from device.
 # ─────────────────────────────────────────────────────────────────────────────
-
 @app.route('/api/alerts', methods=['POST'])
 def receive_alert():
     rid = _request_id()
@@ -121,7 +114,7 @@ def receive_alert():
             "gps=%s battery=%s call=%s sms=%s",
             rid,
             data.get('device_id'),
-            data.get('alert_type', 'N/A'),
+            data.get('alert_type',   'N/A'),
             data.get('trigger_source', 'N/A'),
             data.get('gps_location') or data.get('location', 'N/A'),
             data.get('battery_percentage', 'N/A'),
@@ -145,7 +138,7 @@ def receive_alert():
         hash_results = {}   # filename → {"expected": str, "computed": str, "verified": bool}
 
         for field_name in files:
-            f = files[field_name]
+            f    = files[field_name]
             path = save_file_safe(f, UPLOAD_DIR)
             if not path:
                 logger.warning("[%s] Could not save file: %s", rid, field_name)
@@ -155,11 +148,10 @@ def receive_alert():
             saved_filenames.append(fname)
             logger.info("[%s] Saved evidence file: %s", rid, fname)
 
-            # Compute the actual SHA-256 of the saved file
             computed_hash = compute_sha256(path)
 
             # Check if device sent a hash for this file
-            # Convention: device sends hash as form field "<filename>_sha256"
+            # Convention: device sends hash as form field "<fieldname>_sha256"
             hash_field    = field_name + '_sha256'
             expected_hash = request.form.get(hash_field, '').strip().lower()
 
@@ -171,23 +163,17 @@ def receive_alert():
                     "verified": verified,
                 }
                 if verified:
-                    logger.info(
-                        "[%s] Hash VERIFIED for %s: %s",
-                        rid, fname, computed_hash[:16] + "..."
-                    )
+                    logger.info("[%s] Hash VERIFIED for %s: %s", rid, fname, computed_hash[:16] + "...")
                 else:
                     logger.warning(
                         "[%s] Hash MISMATCH for %s! expected=%s computed=%s",
-                        rid, fname,
-                        expected_hash[:16] + "...",
-                        computed_hash[:16] + "..."
+                        rid, fname, expected_hash[:16] + "...", computed_hash[:16] + "..."
                     )
             else:
-                # No hash provided by device — store what we computed for audit
                 hash_results[fname] = {
                     "expected": None,
                     "computed": computed_hash,
-                    "verified": None,   # None = not checked
+                    "verified": None,
                 }
                 logger.info(
                     "[%s] No hash provided for %s — computed and stored: %s",
@@ -195,7 +181,6 @@ def receive_alert():
                 )
 
         # ── 6. Build hash summary string for DB storage ───────────────────────
-        # Format: "filename:hash,filename:hash" stored in file_hashes column
         hash_summary = ",".join(
             f"{fname}:{info['computed']}"
             for fname, info in hash_results.items()
@@ -206,17 +191,17 @@ def receive_alert():
 
         # ── 8. Write to database ──────────────────────────────────────────────
         new_alert = Alert(
-            device_id             = device_id,
-            timestamp             = datetime.datetime.now(_UTC),    # ← FIX ①
-            alert_type            = data.get('alert_type'),
-            trigger_source        = data.get('trigger_source'),
-            call_placed_status    = str(data.get('call_placed_status',    'false')).lower() == 'true',
-            guardian_sms_status   = str(data.get('guardian_sms_status',   'false')).lower() == 'true',
-            location_sms_status   = str(data.get('location_sms_status',   'false')).lower() == 'true',
-            gps_location          = location_data,
-            battery_percentage    = data.get('battery_percentage'),
-            uploaded_files        = ','.join(saved_filenames),
-            file_hashes           = hash_summary or None,
+            device_id           = device_id,
+            timestamp           = datetime.datetime.now(_UTC),          # FIX ①
+            alert_type          = data.get('alert_type'),
+            trigger_source      = data.get('trigger_source'),
+            call_placed_status  = str(data.get('call_placed_status',  'false')).lower() == 'true',
+            guardian_sms_status = str(data.get('guardian_sms_status', 'false')).lower() == 'true',
+            location_sms_status = str(data.get('location_sms_status', 'false')).lower() == 'true',
+            gps_location        = location_data,
+            battery_percentage  = data.get('battery_percentage'),
+            uploaded_files      = ','.join(saved_filenames),
+            file_hashes         = hash_summary or None,
         )
         DB.session.add(new_alert)
         DB.session.commit()
@@ -244,9 +229,7 @@ def receive_alert():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/health
-# Returns server status, uptime, and database stats.
 # ─────────────────────────────────────────────────────────────────────────────
-
 @app.route('/api/health', methods=['GET'])
 def health():
     try:
@@ -259,28 +242,25 @@ def health():
             if latest_alert and latest_alert.timestamp
             else None
         )
-
         uptime_seconds = int(
-            (datetime.datetime.now(_UTC) - _SERVER_START_TIME).total_seconds()  # ← FIX ①
+            (datetime.datetime.now(_UTC) - _SERVER_START_TIME).total_seconds()   # FIX ①
         )
-
         return jsonify({
             'status':        'ok',
             'server':        'Kavach API',
             'version':       '2.0',
             'uptime_seconds': uptime_seconds,
-            'uptime_human':   _format_uptime(uptime_seconds),
+            'uptime_human':  _format_uptime(uptime_seconds),
             'database': {
-                'status':               'connected',
-                'total_alerts':         total_alerts,
-                'latest_alert_id':      latest_id,
-                'latest_alert_device':  latest_device,
-                'latest_alert_time':    latest_time,
+                'status':              'connected',
+                'total_alerts':        total_alerts,
+                'latest_alert_id':     latest_id,
+                'latest_alert_device': latest_device,
+                'latest_alert_time':   latest_time,
             },
-            'upload_dir':        UPLOAD_DIR,
+            'upload_dir':       UPLOAD_DIR,
             'upload_dir_exists': os.path.isdir(UPLOAD_DIR),
         }), 200
-
     except Exception as exc:
         logger.error("Health check failed: %s", exc, exc_info=True)
         return jsonify({'status': 'error', 'message': str(exc)}), 500
@@ -301,27 +281,26 @@ def _format_uptime(seconds: int) -> str:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/alerts
-# Returns a list of all alerts, newest first.
-# Optional query params:
-#   ?device_id=KAVACH-001  — filter by device
-#   ?limit=20              — cap results (default 50)
+# Optional: ?device_id=KAVACH-001   ?limit=20
+# FIX ③: clamp limit to [1, 200] — prevents ?limit=-1 dumping the full table
 # ─────────────────────────────────────────────────────────────────────────────
-
 @app.route('/api/alerts', methods=['GET'])
 def list_alerts():
     try:
         device_id = request.args.get('device_id')
-        limit     = min(int(request.args.get('limit', 50)), 200)
-        query     = Alert.query.order_by(Alert.id.desc())
+        # FIX ③: max(1, ...) prevents negative limits that bypass the cap
+        limit = max(1, min(int(request.args.get('limit', 50)), 200))
+
+        query = Alert.query.order_by(Alert.id.desc())
         if device_id:
             query = query.filter_by(device_id=device_id)
         alerts = query.limit(limit).all()
+
         return jsonify({
             'status': 'ok',
             'count':  len(alerts),
             'alerts': [_alert_to_dict(a) for a in alerts],
         }), 200
-
     except Exception as exc:
         logger.error("List alerts failed: %s", exc, exc_info=True)
         return jsonify({'status': 'error', 'message': str(exc)}), 500
@@ -329,21 +308,12 @@ def list_alerts():
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/alerts/<int:alert_id>
-# Returns full detail for one alert, including hash verification status
-# for each uploaded evidence file.
 # ─────────────────────────────────────────────────────────────────────────────
-
 @app.route('/api/alerts/<int:alert_id>', methods=['GET'])
 def get_alert(alert_id: int):
     try:
-        # ── FIX ②  ────────────────────────────────────────────────────────────
-        # BEFORE: Alert.query.get(alert_id)
-        #         → Query.get() removed in SQLAlchemy 2.0; raises AttributeError
-        # AFTER:  DB.session.get(Alert, alert_id)
-        #         → correct 2.x API; also works on SQLAlchemy 1.4
-        # ─────────────────────────────────────────────────────────────────────
-        alert = DB.session.get(Alert, alert_id)         # ← FIX ②
-
+        # FIX ②: Alert.query.get() removed in SQLAlchemy 2.0
+        alert = DB.session.get(Alert, alert_id)
         if not alert:
             return jsonify({'status': 'error', 'message': 'Alert not found'}), 404
 
@@ -363,7 +333,6 @@ def get_alert(alert_id: int):
                 fname = fname.strip()
                 if not fname:
                     continue
-
                 fpath = os.path.join(UPLOAD_DIR, fname)
                 if not os.path.exists(fpath):
                     evidence_verification.append({
@@ -381,13 +350,13 @@ def get_alert(alert_id: int):
                 public_url   = f"/uploads/{fname}"
 
                 evidence_verification.append({
-                    'filename':         fname,
-                    'file_exists':      True,
-                    'file_size_bytes':  file_size,
-                    'public_url':       public_url,
-                    'stored_hash':      stored_hash,
-                    'current_hash':     current_hash,
-                    'verified':         verified,
+                    'filename':        fname,
+                    'file_exists':     True,
+                    'file_size_bytes': file_size,
+                    'public_url':      public_url,
+                    'stored_hash':     stored_hash,
+                    'current_hash':    current_hash,
+                    'verified':        verified,
                     'integrity': (
                         'verified'    if verified is True  else
                         'tampered'    if verified is False else
@@ -406,26 +375,24 @@ def get_alert(alert_id: int):
 def _alert_to_dict(alert: Alert) -> dict:
     """Serialise an Alert model instance to a plain dict."""
     return {
-        'id':                   alert.id,
-        'device_id':            alert.device_id,
-        'timestamp':            alert.timestamp.isoformat() if alert.timestamp else None,
-        'alert_type':           alert.alert_type,
-        'trigger_source':       alert.trigger_source,
-        'call_placed_status':   alert.call_placed_status,
-        'guardian_sms_status':  alert.guardian_sms_status,
-        'location_sms_status':  alert.location_sms_status,
-        'gps_location':         alert.gps_location,
-        'battery_percentage':   alert.battery_percentage,
-        'uploaded_files':       alert.uploaded_files,
-        'file_hashes':          alert.file_hashes,
+        'id':                  alert.id,
+        'device_id':           alert.device_id,
+        'timestamp':           alert.timestamp.isoformat() if alert.timestamp else None,
+        'alert_type':          alert.alert_type,
+        'trigger_source':      alert.trigger_source,
+        'call_placed_status':  alert.call_placed_status,
+        'guardian_sms_status': alert.guardian_sms_status,
+        'location_sms_status': alert.location_sms_status,
+        'gps_location':        alert.gps_location,
+        'battery_percentage':  alert.battery_percentage,
+        'uploaded_files':      alert.uploaded_files,
+        'file_hashes':         alert.file_hashes,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /uploads/<filename>
-# Serve evidence files (video clips, images, placeholder text files).
 # ─────────────────────────────────────────────────────────────────────────────
-
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
     return send_from_directory(UPLOAD_DIR, filename)
@@ -434,15 +401,14 @@ def uploaded_file(filename):
 # ─────────────────────────────────────────────────────────────────────────────
 # Boot
 # ─────────────────────────────────────────────────────────────────────────────
-
 if __name__ == '__main__':
     with app.app_context():
         DB.create_all()
 
     logger.info("=" * 55)
     logger.info(" Kavach Server v2.0 starting")
-    logger.info(" Database:    kavach.db")
-    logger.info(" Upload dir:  %s", UPLOAD_DIR)
+    logger.info(" Database: kavach.db")
+    logger.info(" Upload dir: %s", UPLOAD_DIR)
     logger.info(" Endpoints:")
     logger.info("   POST /api/alerts        — receive telemetry")
     logger.info("   GET  /api/alerts        — list all alerts")
@@ -452,6 +418,5 @@ if __name__ == '__main__':
     logger.info("=" * 55)
 
     # debug=False in production — debug=True exposes the Werkzeug interactive
-    # debugger which allows arbitrary code execution by anyone who can reach
-    # the server IP. Only set to True on a local dev machine.
+    # debugger which allows arbitrary code execution.
     app.run(host='0.0.0.0', port=8080, debug=False)

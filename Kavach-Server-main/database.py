@@ -1,17 +1,20 @@
 """
-database.py  —  Kavach Server
+database.py — Kavach Server
+
 SQLAlchemy model for the Alert table.
 
-Changes from original:
-  + trigger_source  — what caused the alert (button_single, fall_detected, audio_Screaming...)
-  + alert_type      — SOS | MEDICAL
-  + file_hashes     — "filename:sha256hash,filename:sha256hash" — evidence integrity chain
+FIXES APPLIED:
+  - datetime.UTC → datetime.timezone.utc  (Python 3.2+ compatible)
+  - Column default is now a callable lambda so each row gets the current time,
+    not the single timestamp captured at import time.
 """
 
 from flask_sqlalchemy import SQLAlchemy
 import datetime
 
 DB = SQLAlchemy()
+
+_UTC = datetime.timezone.utc   # single alias, works on Python 3.2+
 
 
 class Alert(DB.Model):
@@ -21,12 +24,13 @@ class Alert(DB.Model):
     id = DB.Column(DB.Integer, primary_key=True)
 
     # ── When and who ──────────────────────────────────────────────────────────
-    timestamp  = DB.Column(DB.DateTime, default=datetime.datetime.now(datetime.UTC))
+    # FIX: use a lambda so the default is evaluated per-row, not once at import
+    timestamp  = DB.Column(DB.DateTime, default=lambda: datetime.datetime.now(_UTC))
     device_id  = DB.Column(DB.String(64), nullable=False)
 
     # ── Alert classification ──────────────────────────────────────────────────
-    alert_type     = DB.Column(DB.String(16),  nullable=True)  # "SOS" | "MEDICAL"
-    trigger_source = DB.Column(DB.String(64),  nullable=True)  # "button_single" | "fall_detected" | "audio_Screaming" | ...
+    alert_type     = DB.Column(DB.String(16), nullable=True)   # "SOS" | "MEDICAL"
+    trigger_source = DB.Column(DB.String(64), nullable=True)   # "button_single" | "fall_detected" | ...
 
     # ── Action status flags ───────────────────────────────────────────────────
     call_placed_status  = DB.Column(DB.Boolean, default=False)
@@ -35,15 +39,14 @@ class Alert(DB.Model):
 
     # ── Telemetry ─────────────────────────────────────────────────────────────
     gps_location       = DB.Column(DB.String(255), nullable=True)
-    battery_percentage = DB.Column(DB.String(10),  nullable=True)  # "87%" | "N/A" | "Error"
+    battery_percentage = DB.Column(DB.String(10),  nullable=True)   # "87%" | "N/A" | "Error"
 
     # ── Evidence files ────────────────────────────────────────────────────────
     # Comma-separated filenames: "video_20250101_120000.h264,..."
     uploaded_files = DB.Column(DB.String(1024), nullable=True)
 
-    # SHA-256 hash chain: "video_20250101_120000.h264:abc123...,..."
+    # SHA-256 hash chain: "video_20250101_120000.h264:abc123...,...".
     # Populated server-side when files are received.
-    # Use GET /api/alerts/<id> to re-verify live against disk.
     file_hashes = DB.Column(DB.String(2048), nullable=True)
 
     def __repr__(self):

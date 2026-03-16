@@ -1,53 +1,43 @@
 """
 main.py — Project Kavach
 
-Full state machine refactor with concurrent trigger threads.
+Full state machine with concurrent trigger threads.
 
 STATE MACHINE:
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│  ┌──────────┐   any trigger   ┌──────────────┐                 │
-│  │   IDLE   │ ───────────────► │ ALERT_ACTIVE │                 │
-│  └──────────┘                 └──────────────┘                 │
-│       ▲                              │                          │
-│       │        long press 5s         │                          │
-│       └─────────────────────────────┘                          │
-│                  (safe_sequence)                                │
+│  ┌──────────┐  any trigger  ┌──────────────┐                   │
+│  │   IDLE   │ ────────────► │ ALERT_ACTIVE │                   │
+│  └──────────┘               └──────────────┘                   │
+│        ▲                           │                           │
+│        │       long press 5s       │                           │
+│        └───────────────────────────┘                           │
+│                 (safe_sequence)                                 │
 │                                                                 │
-│  Triggers that cause IDLE → ALERT_ACTIVE:                       │
-│    • Button single press  → SOS                                 │
-│    • Button double press  → MEDICAL                             │
-│    • IMU fall detected    → SOS                                 │
-│    • Heart rate spike     → SOS                                 │
-│    • Audio danger sound   → SOS                                 │
+│  Triggers that cause IDLE → ALERT_ACTIVE:                      │
+│    • Button single press  → SOS                                │
+│    • Button double press  → MEDICAL                            │
+│    • IMU fall detected    → SOS                                │
+│    • Heart rate spike     → SOS                                │
+│    • Audio danger sound   → SOS                                │
 │                                                                 │
-│  Trigger that causes ALERT_ACTIVE → IDLE:                       │
-│    • Button long press 5s → SAFE (cancel + notify guardian)     │
-│                                                                 │
-│  While ALERT_ACTIVE:                                            │
-│    • All new triggers are BLOCKED (one alert at a time)         │
-│    • 60-second GPS + battery + evidence loop runs               │
-│    • LoRa broadcasts in parallel if 4G upload fails             │
+│  Trigger that causes ALERT_ACTIVE → IDLE:                      │
+│    • Button long press 5s → SAFE (cancel + notify guardian)    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
 CONCURRENT TRIGGER THREADS (all run from boot, daemon threads):
-    Thread 1: ButtonPoller      — 50 Hz GPIO poll (button.py FSM)
-    Thread 2: IMUMonitor        — 10 Hz BNO055/FakeIMU reads
-    Thread 3: HeartRateMonitor  — 0.2 Hz MAX30102/FakeHeartRate reads
-    Thread 4: YAMNetAudioThread — continuous mic stream + inference
-    Thread 5: LoRaRX            — continuous SX1278 receive loop
-
-All threads call the same central trigger_alert() function.
-A threading.Lock ensures only the first caller wins — all others
-are silently dropped while an alert is already active.
+  Thread 1: ButtonPoller       — 50 Hz GPIO poll
+  Thread 2: IMUMonitor         — 10 Hz BNO055/FakeIMU reads
+  Thread 3: HeartRateMonitor   — 0.2 Hz MAX30102/FakeHeartRate reads
+  Thread 4: YAMNetAudioThread  — continuous mic stream + inference
+  Thread 5: LoRaRX             — continuous SX1278 receive loop
 
 FIX applied (serial port conflict):
-    A single SIM7600 instance is created once at boot (step 2) and stored
-    on the KavachStateMachine.  Every call to trigger_alert() and
-    trigger_safe() forwards that shared instance into the alert sequence
-    functions.  The serial port is therefore opened exactly once and never
-    contested between concurrent sequences.
+  A single SIM7600 instance is created once at boot (step 3) and stored on
+  the KavachStateMachine.  Every call to trigger_alert() and trigger_safe()
+  forwards that shared instance into the alert sequence functions.  The serial
+  port is therefore opened exactly once and never contested.
 """
 
 import signal
@@ -55,22 +45,21 @@ import threading
 import time
 import logging
 import json
-from enum import Enum, auto
 
+from enum import Enum, auto
 from sqlalchemy import create_engine
 
 from database import Alert, Base
-from hardware.button import ButtonHandler
+from hardware.button  import ButtonHandler
 from hardware.sensors import SensorManager
-from hardware.audio import AudioManager, DetectionEvent
-from hardware.lora import LoRaManager, LoRaPacket
-from hardware.comms import SIM7600
+from hardware.audio   import AudioManager, DetectionEvent
+from hardware.lora    import LoRaManager, LoRaPacket
+from hardware.comms   import SIM7600
 from alerts import sos_sequence, medical_sequence, safe_sequence
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
 # ─────────────────────────────────────────────────────────────────────────────
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -78,10 +67,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kavach.main")
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Device States
 # ─────────────────────────────────────────────────────────────────────────────
-
 class DeviceState(Enum):
     IDLE         = auto()   # waiting for any trigger, all sensors active
     ALERT_ACTIVE = auto()   # SOS or MEDICAL loop running, new triggers blocked
@@ -90,22 +79,21 @@ class DeviceState(Enum):
 # ─────────────────────────────────────────────────────────────────────────────
 # State Machine
 # ─────────────────────────────────────────────────────────────────────────────
-
 class KavachStateMachine:
     """
-    Central state machine. Single instance lives in module scope.
+    Central state machine.  Single instance lives in module scope.
     All trigger threads call trigger_alert() or trigger_safe() on it.
 
     Thread safety:
-        _lock guards every state read/write.
-        Only one alert sequence can run at a time — the first trigger that
-        calls trigger_alert() while IDLE wins. All subsequent calls while
-        ALERT_ACTIVE return immediately with a log message.
+      _lock guards every state read/write.
+      Only one alert sequence can run at a time — the first trigger that
+      calls trigger_alert() while IDLE wins.  All subsequent calls while
+      ALERT_ACTIVE return immediately with a log message.
 
     SIM7600 ownership:
-        The shared `sim` instance is injected at construction time and
-        forwarded into every alert sequence. The serial port is opened once,
-        in main(), before this machine is started.
+      The shared `sim` instance is injected at construction time and forwarded
+      into every alert sequence.  The serial port is opened once, in main(),
+      before this machine is started.
     """
 
     def __init__(self, sim: SIM7600):
@@ -115,7 +103,6 @@ class KavachStateMachine:
         self._sim        = sim    # shared serial port — never re-opened
 
     # ── Public properties ─────────────────────────────────────────────────────
-
     @property
     def state(self) -> DeviceState:
         with self._lock:
@@ -132,11 +119,10 @@ class KavachStateMachine:
             return self._state == DeviceState.ALERT_ACTIVE
 
     # ── State transitions ─────────────────────────────────────────────────────
-
     def trigger_alert(self, alert_type: str, trigger_source: str) -> bool:
         """
-        Attempt to transition IDLE → ALERT_ACTIVE and launch the
-        appropriate alert sequence in a new daemon thread.
+        Attempt to transition IDLE → ALERT_ACTIVE and launch the appropriate
+        alert sequence in a new daemon thread.
 
         Returns True  if the alert was accepted and launched.
         Returns False if an alert is already active (trigger dropped).
@@ -193,9 +179,7 @@ class KavachStateMachine:
         try:
             target_fn(**kwargs)
         except Exception as exc:
-            logger.error(
-                "[StateMachine] Alert sequence raised: %s", exc, exc_info=True
-            )
+            logger.error("[StateMachine] Alert sequence raised: %s", exc, exc_info=True)
         finally:
             with self._lock:
                 prev_type        = self._alert_type
@@ -208,7 +192,7 @@ class KavachStateMachine:
 
     def trigger_safe(self) -> None:
         """
-        Long press handler. Runs safe_sequence() regardless of current state:
+        Long press handler.  Runs safe_sequence() regardless of current state:
           - If ALERT_ACTIVE: cancels the running loop and sends 'I am safe' SMS
           - If IDLE:         sends a check-in SMS to guardian
 
@@ -234,7 +218,6 @@ class KavachStateMachine:
 # ─────────────────────────────────────────────────────────────────────────────
 # Config loader
 # ─────────────────────────────────────────────────────────────────────────────
-
 def load_config() -> dict:
     with open('config.json', 'r') as f:
         return json.load(f)
@@ -243,9 +226,9 @@ def load_config() -> dict:
 def validate_config(config: dict) -> None:
     """Log CRITICAL warnings if config still contains placeholder values."""
     placeholders = {
-        'guardian_number': '+91XXXXXXXXXX',
-        'medical_number':  '+91YYYYYYYYYY',
-        'server_url':      'http://your-server-ip:8080/api/alerts',
+        'guardian_number':  '+91XXXXXXXXXX',
+        'medical_number':   '+91YYYYYYYYYY',
+        'server_url':       'http://your-server-ip:8080/api/alerts',
         'server_public_url': 'http://your-server-ip:8080/uploads/',
     }
     for key, placeholder in placeholders.items():
@@ -261,22 +244,22 @@ def validate_config(config: dict) -> None:
 # Module-level state machine instance placeholder
 # (assigned after SIM7600 is constructed in __main__)
 # ─────────────────────────────────────────────────────────────────────────────
-
-kavach: KavachStateMachine = None   # type: ignore  — set in __main__
-lora_manager: LoRaManager  = None   # type: ignore  — set in __main__
+kavach:      KavachStateMachine = None   # type: ignore — set in __main__
+lora_manager: LoRaManager       = None   # type: ignore — set in __main__
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRIGGER THREAD 1 — Button (runs inside hardware/button.py's polling thread)
+# TRIGGER THREAD 1 — Button
 # ─────────────────────────────────────────────────────────────────────────────
-
 def _on_sos():
     """Single press → SOS."""
     kavach.trigger_alert("sos", "button_single")
 
+
 def _on_medical():
     """Double press → Medical alert."""
     kavach.trigger_alert("medical", "button_double")
+
 
 def _on_safe():
     """Long press 5 s → Safe / cancel."""
@@ -286,12 +269,11 @@ def _on_safe():
 # ─────────────────────────────────────────────────────────────────────────────
 # TRIGGER THREAD 2 — IMU fall detection
 # ─────────────────────────────────────────────────────────────────────────────
-
 def _imu_monitor(sensor_manager: SensorManager) -> None:
     """
     Polls the IMU at 10 Hz (every 100 ms).
     Triggers SOS if the acceleration magnitude exceeds the fall threshold.
-    Falls back to FakeIMU data automatically — no code changes needed.
+    Falls back to FakeIMU data automatically.
     """
     logger.info("[IMU] Monitor thread started.")
     while True:
@@ -312,7 +294,6 @@ def _imu_monitor(sensor_manager: SensorManager) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # TRIGGER THREAD 3 — Heart rate / SpO2 monitoring
 # ─────────────────────────────────────────────────────────────────────────────
-
 def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
     """
     Reads heart rate every 5 seconds.
@@ -330,9 +311,7 @@ def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
                     "REAL" if reading.is_real_hardware else "FAKE"
                 )
                 if reading.is_distress_detected:
-                    logger.warning(
-                        "[HeartRate] DISTRESS DETECTED BPM=%.1f", reading.bpm
-                    )
+                    logger.warning("[HeartRate] DISTRESS DETECTED BPM=%.1f", reading.bpm)
                     kavach.trigger_alert("sos", "heartrate_spike")
         except Exception as exc:
             logger.error("[HeartRate] Read error: %s", exc)
@@ -340,9 +319,8 @@ def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRIGGER THREAD 4 — Audio danger sound detection (runs inside audio.py)
+# TRIGGER THREAD 4 — Audio danger sound detection
 # ─────────────────────────────────────────────────────────────────────────────
-
 def _on_audio_detection(event: DetectionEvent) -> None:
     """
     Called by AudioManager's background YAMNet inference thread.
@@ -369,18 +347,15 @@ def _on_audio_detection(event: DetectionEvent) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TRIGGER THREAD 5 — LoRa mesh relay (runs inside lora.py's RX thread)
+# TRIGGER THREAD 5 — LoRa mesh relay
 # ─────────────────────────────────────────────────────────────────────────────
-
 def _on_lora_packet(packet: LoRaPacket) -> None:
     """
     Called when a LoRa packet arrives from another Kavach device.
-
     Relay logic:
-        SOS/MEDICAL from another device → re-broadcast with hop_count + 1
-        (max 3 hops to prevent infinite relay loops)
-        SAFE      → log only
-        HEARTBEAT → log only (future feature)
+      SOS/MEDICAL → re-broadcast with hop_count + 1  (max 3 hops)
+      SAFE        → log only
+      HEARTBEAT   → log only
     """
     if lora_manager is None:
         logger.warning("[LoRa] Packet received but lora_manager is None — ignoring.")
@@ -389,19 +364,19 @@ def _on_lora_packet(packet: LoRaPacket) -> None:
     logger.info(
         "[LoRa] RX: type=%-8s from=%-15s hop=%d gps=%s",
         packet.packet_type, packet.device_id,
-        packet.hop_count, packet.gps_location
+        packet.hop_count,   packet.gps_location
     )
 
     if packet.packet_type in ("SOS", "MEDICAL"):
         if packet.hop_count < 3:
             relay = LoRaPacket(
-                packet_type=packet.packet_type,
-                device_id=packet.device_id,
-                trigger=packet.trigger,
-                gps_location=packet.gps_location,
-                battery=packet.battery,
-                timestamp=packet.timestamp,
-                hop_count=packet.hop_count + 1,
+                packet_type  = packet.packet_type,
+                device_id    = packet.device_id,
+                trigger      = packet.trigger,
+                gps_location = packet.gps_location,
+                battery      = packet.battery,
+                timestamp    = packet.timestamp,
+                hop_count    = packet.hop_count + 1,
             )
             threading.Thread(
                 target=lora_manager.radio.send_packet,
@@ -427,8 +402,7 @@ def _on_lora_packet(packet: LoRaPacket) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info(" Project Kavach — starting up")
     logger.info("=" * 60)
@@ -444,7 +418,6 @@ if __name__ == "__main__":
     logger.info("[Boot] Config loaded. Device ID: %s", config.get('device_id'))
 
     # ── 3. Single shared SIM7600 instance ─────────────────────────────────────
-    #       Created ONCE here — never re-opened inside alert sequences.
     sim = SIM7600(port=config['serial_port'], baud=config['baud_rate'])
     logger.info("[Boot] SIM7600 initialized on %s.", config['serial_port'])
 
@@ -458,10 +431,10 @@ if __name__ == "__main__":
 
     # ── 6. Button handler ─────────────────────────────────────────────────────
     button = ButtonHandler(
-        pin=config['sos_button_pin'],
-        on_sos_press=_on_sos,
-        on_medical_press=_on_medical,
-        on_safe_press=_on_safe,
+        pin             = config['sos_button_pin'],
+        on_sos_press    = _on_sos,
+        on_medical_press= _on_medical,
+        on_safe_press   = _on_safe,
     )
     button.start()
     logger.info("[Boot] Button handler started on pin %d.", config['sos_button_pin'])
@@ -483,14 +456,12 @@ if __name__ == "__main__":
         name="IMUMonitor",
         daemon=True
     ).start()
-
     threading.Thread(
         target=_heart_rate_monitor,
         args=(sensor_manager,),
         name="HeartRateMonitor",
         daemon=True
     ).start()
-
     logger.info("[Boot] Sensor monitor threads started.")
 
     # ── 10. Ready ─────────────────────────────────────────────────────────────
@@ -517,6 +488,6 @@ if __name__ == "__main__":
         sensor_manager.stop()
         audio_manager.stop()
         lora_manager.stop()
-        sim.close()             # ← cleanly release the serial port
+        sim.close()   # cleanly release the serial port
         logger.info("[Boot] Kavach shutdown complete.")
         logger.info("=" * 60)
