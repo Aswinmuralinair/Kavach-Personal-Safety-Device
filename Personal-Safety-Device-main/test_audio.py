@@ -63,6 +63,8 @@ def main():
     audio.start(on_detection=on_detection)
     print(f"  Status: {audio.status_string()}")
 
+    # Import both concrete detectors only for explicit runtime reporting.
+    # AudioManager still auto-selects REAL vs FAKE detector internally.
     from hardware.audio import YAMNetDetector, FakeAudioDetector
 
     if isinstance(audio.detector, FakeAudioDetector):
@@ -81,13 +83,21 @@ def main():
                 time.sleep(0.5)
         except KeyboardInterrupt:
             pass
-    else:
+    elif isinstance(audio.detector, YAMNetDetector):
         print("\n  Running with REAL YAMNet model + microphone.")
         print("  Make loud sounds near your mic to test:")
         print("    - Shout loudly")
         print("    - Clap sharply")
         print("    - Play a scream/gunshot sound nearby")
         print("\n  Press Ctrl+C to stop.\n")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+    else:
+        print("\n  Running with detector:", type(audio.detector).__name__)
+        print("  Press Ctrl+C to stop.\n")
         try:
             while True:
                 time.sleep(1)
