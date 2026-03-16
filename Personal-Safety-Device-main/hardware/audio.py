@@ -401,7 +401,7 @@ class FakeAudioDetector(BaseAudioDetector):
 
     def _loop(self) -> None:
         while self._running:
-            triggered = self._wake.wait(timeout=self.AUTO_INTERVAL)
+            self._wake.wait(timeout=self.AUTO_INTERVAL)
             if not self._running:
                 break
             self._wake.clear()

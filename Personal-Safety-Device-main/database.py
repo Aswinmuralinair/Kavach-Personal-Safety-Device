@@ -11,7 +11,6 @@ FIXES APPLIED:
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean
 from sqlalchemy.orm import declarative_base    # FIX: was sqlalchemy.ext.declarative
-from sqlalchemy.orm import sessionmaker
 import datetime
 
 Base = declarative_base()

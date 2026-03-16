@@ -48,7 +48,6 @@ def download(url: str, dest: str, label: str) -> None:
 def verify_model(path: str) -> None:
     print("\n   [TEST] Verifying model loads correctly...")
     try:
-        import numpy as np
         try:
             import tflite_runtime.interpreter as tflite
             interp = tflite.Interpreter(model_path=path)

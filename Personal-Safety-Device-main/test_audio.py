@@ -18,7 +18,6 @@ No GPIO, no SIM7600, no Pi needed — 100% laptop safe.
 """
 
 import logging
-import threading
 import time
 import sys
 import os
@@ -75,8 +74,8 @@ def main():
         idx = 0
         try:
             while True:
-                inp = input(f"  Press Enter to simulate '{sounds[idx % len(sounds)]}' "
-                            f"(or Ctrl+C to quit): ")
+                input(f"  Press Enter to simulate '{sounds[idx % len(sounds)]}' "
+                      f"(or Ctrl+C to quit): ")
                 audio.simulate_detection(sounds[idx % len(sounds)])
                 idx += 1
                 time.sleep(0.5)

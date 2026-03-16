@@ -50,15 +50,13 @@ PLUG-AND-PLAY:
     Zero code changes needed anywhere else.
 """
 
-import os
 import time
 import json
-import struct
 import hashlib
 import threading
 import logging
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, Callable
 
@@ -599,7 +597,7 @@ class LoRaSimulator(BaseLoRa):
     def _rx_loop(self) -> None:
         logger.info("[LoRaSimulator] RX simulation loop started.")
         while self._rx_running:
-            triggered = self._wake.wait(timeout=self.SIM_RX_INTERVAL)
+            self._wake.wait(timeout=self.SIM_RX_INTERVAL)
             if not self._rx_running:
                 break
             self._wake.clear()

@@ -45,11 +45,12 @@ import threading
 import time
 import logging
 import json
+import os
 
 from enum import Enum, auto
 from sqlalchemy import create_engine
 
-from database import Alert, Base
+from database import Base
 from hardware.button  import ButtonHandler
 from hardware.sensors import SensorManager
 from hardware.audio   import AudioManager, DetectionEvent
@@ -219,7 +220,9 @@ class KavachStateMachine:
 # Config loader
 # ─────────────────────────────────────────────────────────────────────────────
 def load_config() -> dict:
-    with open('config.json', 'r') as f:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(base_dir, 'config.json')
+    with open(config_path, 'r') as f:
         return json.load(f)
 
 

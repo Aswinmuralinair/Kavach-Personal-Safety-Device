@@ -30,5 +30,5 @@ except Exception as e:
 finally:
     try:
         ser.close()
-    except:
+    except Exception:
         pass

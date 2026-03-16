@@ -27,13 +27,12 @@ import os
 import sys
 import json
 import base64
-import hashlib
 import logging
 import datetime
 import uuid
 
 from database import DB, Alert
-from utils import save_file_safe, compute_sha256, verify_file_hash
+from utils import save_file_safe, compute_sha256
 from crypto_utils import chacha_decrypt_text
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -272,9 +271,12 @@ def _format_uptime(seconds: int) -> str:
     h, rem = divmod(rem, 3600)
     m, s   = divmod(rem, 60)
     parts  = []
-    if d: parts.append(f"{d}d")
-    if h: parts.append(f"{h}h")
-    if m: parts.append(f"{m}m")
+    if d:
+        parts.append(f"{d}d")
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}m")
     parts.append(f"{s}s")
     return ' '.join(parts)
 
@@ -288,9 +290,17 @@ def _format_uptime(seconds: int) -> str:
 def list_alerts():
     try:
         device_id = request.args.get('device_id')
-        # FIX ③: max(1, ...) prevents negative limits that bypass the cap
-        limit = max(1, min(int(request.args.get('limit', 50)), 200))
+        raw_limit = request.args.get('limit', '50')
+        try:
+            parsed_limit = int(raw_limit)
+        except ValueError:
+            return jsonify({
+                'status': 'error',
+                'message': f"Invalid limit '{raw_limit}'. Expected integer in [1, 200].",
+            }), 400
 
+        # FIX ③: max(1, ...) prevents negative limits that bypass the cap
+        limit = max(1, min(parsed_limit, 200))
         query = Alert.query.order_by(Alert.id.desc())
         if device_id:
             query = query.filter_by(device_id=device_id)
