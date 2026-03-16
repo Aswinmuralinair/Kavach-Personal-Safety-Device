@@ -47,6 +47,12 @@ except (ImportError, FileNotFoundError):
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Base directory — all relative paths resolve from here, not the CWD.
+# This ensures alerts.py works when launched via systemd or from another dir.
+# ─────────────────────────────────────────────────────────────────────────────
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Single module-level stop event — used so safe_sequence() can wake the update
 # loop across threads.  State ownership stays in KavachStateMachine (main.py).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,7 +61,8 @@ _stop_alert_event = threading.Event()
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared SQLAlchemy engine — created ONCE, not per call
 # ─────────────────────────────────────────────────────────────────────────────
-_ENGINE = create_engine('sqlite:///alerts.db')
+_db_path = os.path.join(_BASE_DIR, 'alerts.db')
+_ENGINE = create_engine(f'sqlite:///{_db_path}')
 Base.metadata.create_all(_ENGINE)
 _SessionFactory = sessionmaker(bind=_ENGINE)
 
@@ -65,7 +72,8 @@ _SessionFactory = sessionmaker(bind=_ENGINE)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_config() -> dict:
-    with open('config.json', 'r') as f:
+    config_path = os.path.join(_BASE_DIR, 'config.json')
+    with open(config_path, 'r') as f:
         return json.load(f)
 
 
@@ -167,7 +175,7 @@ def _run_update_loop(
         session.commit()
 
         # 4. Evidence upload — only files NOT already uploaded this session
-        evidence_dir = config.get('evidence_dir', 'evidence')
+        evidence_dir = os.path.join(_BASE_DIR, config.get('evidence_dir', 'evidence'))
         try:
             all_files = [
                 f for f in os.listdir(evidence_dir)

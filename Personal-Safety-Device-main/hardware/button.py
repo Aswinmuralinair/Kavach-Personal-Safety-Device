@@ -208,12 +208,12 @@ class ButtonHandler:
                     self._state = self._IDLE
 
             # Ghost states — just wait for button to fully release, then IDLE
-            elif self._state == "_WAIT_RELEASE_AFTER_LONG":
+            elif self._state == self._WAIT_RELEASE_AFTER_LONG:
                 if just_released:
                     self._state = self._IDLE
                     logger.debug("[Button] Button released after long press — IDLE.")
 
-            elif self._state == "_WAIT_RELEASE_AFTER_DOUBLE":
+            elif self._state == self._WAIT_RELEASE_AFTER_DOUBLE:
                 if just_released:
                     self._state = self._IDLE
                     logger.debug("[Button] Button released after double press — IDLE.")

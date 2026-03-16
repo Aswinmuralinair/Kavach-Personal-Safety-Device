@@ -40,7 +40,6 @@ FIX applied (serial port conflict):
   port is therefore opened exactly once and never contested.
 """
 
-import signal
 import threading
 import time
 import logging
@@ -57,6 +56,12 @@ from hardware.audio   import AudioManager, DetectionEvent
 from hardware.lora    import LoRaManager, LoRaPacket
 from hardware.comms   import SIM7600
 from alerts import sos_sequence, medical_sequence, safe_sequence
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Base directory — all relative paths (DB, config, evidence) resolve from here
+# so the device works regardless of the current working directory (e.g. systemd).
+# ─────────────────────────────────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -411,9 +416,10 @@ if __name__ == '__main__':
     logger.info("=" * 60)
 
     # ── 1. Database ───────────────────────────────────────────────────────────
-    engine = create_engine('sqlite:///alerts.db')
+    db_path = os.path.join(BASE_DIR, 'alerts.db')
+    engine = create_engine(f'sqlite:///{db_path}')
     Base.metadata.create_all(engine)
-    logger.info("[Boot] Database ready.")
+    logger.info("[Boot] Database ready at %s.", db_path)
 
     # ── 2. Config ─────────────────────────────────────────────────────────────
     config = load_config()
@@ -481,8 +487,11 @@ if __name__ == '__main__':
     logger.info("=" * 60)
 
     # ── 11. Main thread sleeps — all work is in daemon threads ────────────────
+    # signal.pause() is Unix-only — use a cross-platform sleep loop instead
+    # so the device firmware runs identically on Windows (dev) and Pi (prod).
     try:
-        signal.pause()
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         logger.info("\n[Boot] Shutdown requested.")
     finally:

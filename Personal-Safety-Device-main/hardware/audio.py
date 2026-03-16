@@ -47,11 +47,12 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Paths
+# Paths — resolve relative to the project root (parent of hardware/), not CWD
 # ─────────────────────────────────────────────────────────────────────────────
 
-MODEL_PATH     = os.path.join("models", "yamnet.tflite")
-CLASS_MAP_PATH = os.path.join("models", "yamnet_class_map.csv")
+_PROJECT_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH     = os.path.join(_PROJECT_DIR, "models", "yamnet.tflite")
+CLASS_MAP_PATH = os.path.join(_PROJECT_DIR, "models", "yamnet_class_map.csv")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tunable constants
@@ -190,6 +191,7 @@ class YAMNetDetector(BaseAudioDetector):
         self._running  = False
         self._callback: Optional[Callable[[DetectionEvent], None]] = None
         self._last_trigger = 0.0
+        self._inferring = False   # guard against thread pile-up on slow hardware
 
     def initialise(self) -> None:
         self._load_model()
@@ -292,11 +294,14 @@ class YAMNetDetector(BaseAudioDetector):
                         self._ring_buffer[-HOP_SAMPLES:] = hop_buf.copy()
                         snap = self._ring_buffer.copy()
 
-                    threading.Thread(
-                        target=self._infer_and_fire,
-                        args=(snap,),
-                        daemon=True
-                    ).start()
+                    # Skip if previous inference is still running (prevents
+                    # thread pile-up on slow hardware like the Pi)
+                    if not self._inferring:
+                        threading.Thread(
+                            target=self._infer_and_fire,
+                            args=(snap,),
+                            daemon=True
+                        ).start()
                     hop_pos = 0
 
         logger.info("[YAMNet] Opening mic stream at %d Hz...", SAMPLE_RATE)
@@ -317,11 +322,14 @@ class YAMNetDetector(BaseAudioDetector):
         logger.info("[YAMNet] Audio thread stopped.")
 
     def _infer_and_fire(self, waveform: np.ndarray) -> None:
+        self._inferring = True
         try:
             detections = self._run_inference(waveform)
         except Exception as exc:
             logger.error("[YAMNet] Inference error: %s", exc)
             return
+        finally:
+            self._inferring = False
 
         if not detections:
             return
