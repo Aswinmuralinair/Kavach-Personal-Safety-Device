@@ -51,12 +51,13 @@ from enum import Enum, auto
 from sqlalchemy import create_engine
 
 from database import Base
-from hardware.button  import ButtonHandler
-from hardware.sensors import SensorManager
-from hardware.audio   import AudioManager, DetectionEvent
-from hardware.lora    import LoRaManager, LoRaPacket
-from hardware.comms   import SIM7600
-from hardware.camera  import CameraManager
+from hardware.button         import ButtonHandler
+from hardware.sensors        import SensorManager
+from hardware.audio          import AudioManager, DetectionEvent
+from hardware.audio_recorder import AudioRecorderManager
+from hardware.lora           import LoRaManager, LoRaPacket
+from hardware.comms          import SIM7600
+from hardware.camera         import CameraManager
 from alerts import sos_sequence, medical_sequence, safe_sequence
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -104,12 +105,14 @@ class KavachStateMachine:
       before this machine is started.
     """
 
-    def __init__(self, sim: SIM7600, camera: CameraManager = None):
-        self._state      = DeviceState.IDLE
-        self._lock       = threading.Lock()
-        self._alert_type = None   # "sos" | "medical" | None
-        self._sim        = sim    # shared serial port — never re-opened
-        self._camera     = camera # shared camera — records evidence during alerts
+    def __init__(self, sim: SIM7600, camera: CameraManager = None,
+                 audio_recorder: AudioRecorderManager = None):
+        self._state          = DeviceState.IDLE
+        self._lock           = threading.Lock()
+        self._alert_type     = None   # "sos" | "medical" | None
+        self._sim            = sim    # shared serial port — never re-opened
+        self._camera         = camera # shared camera — records video during alerts
+        self._audio_recorder = audio_recorder  # shared mic — records audio during alerts
 
     # ── Public properties ─────────────────────────────────────────────────────
     @property
@@ -161,10 +164,12 @@ class KavachStateMachine:
         # Launch the alert sequence in a daemon thread (outside the lock)
         if alert_type == "sos":
             target = sos_sequence
-            kwargs = {"sim": self._sim, "trigger_source": trigger_source, "camera": self._camera}
+            kwargs = {"sim": self._sim, "trigger_source": trigger_source,
+                      "camera": self._camera, "audio_recorder": self._audio_recorder}
         elif alert_type == "medical":
             target = medical_sequence
-            kwargs = {"sim": self._sim, "camera": self._camera}
+            kwargs = {"sim": self._sim, "camera": self._camera,
+                      "audio_recorder": self._audio_recorder}
         else:
             logger.error("[StateMachine] Unknown alert_type: '%s'", alert_type)
             with self._lock:
@@ -214,7 +219,8 @@ class KavachStateMachine:
 
         threading.Thread(
             target=safe_sequence,
-            kwargs={"sim": self._sim, "was_active_type": was_active, "camera": self._camera},
+            kwargs={"sim": self._sim, "was_active_type": was_active,
+                    "camera": self._camera, "audio_recorder": self._audio_recorder},
             name="Safe",
             daemon=True
         ).start()
@@ -237,10 +243,12 @@ def load_config() -> dict:
 def validate_config(config: dict) -> None:
     """Log CRITICAL warnings if config still contains placeholder values."""
     placeholders = {
-        'guardian_number':  '+91XXXXXXXXXX',
-        'medical_number':   '+91YYYYYYYYYY',
-        'server_url':       'http://your-server-ip:8080/api/alerts',
+        'guardian_number':   '+91XXXXXXXXXX',
+        'medical_number':    '+91YYYYYYYYYY',
+        'server_url':        'http://your-server-ip:8080/api/alerts',
         'server_public_url': 'http://your-server-ip:8080/uploads/',
+        'whatsapp_number':   '+91XXXXXXXXXX',
+        'whatsapp_apikey':   'YOUR_CALLMEBOT_APIKEY',
     }
     for key, placeholder in placeholders.items():
         if config.get(key) == placeholder:
@@ -496,15 +504,19 @@ if __name__ == '__main__':
     camera_manager = CameraManager(evidence_dir=evidence_dir)
     logger.info("[Boot] %s", camera_manager.status_string())
 
-    # ── 5. State machine — inject the shared sim + camera ───────────────────
-    kavach = KavachStateMachine(sim=sim, camera=camera_manager)
+    # ── 5. Audio recorder ──────────────────────────────────────────────────────
+    audio_recorder = AudioRecorderManager(evidence_dir=evidence_dir)
+    logger.info("[Boot] %s", audio_recorder.status_string())
 
-    # ── 6. Sensor manager ─────────────────────────────────────────────────────
+    # ── 6. State machine — inject shared sim + camera + audio recorder ──────
+    kavach = KavachStateMachine(sim=sim, camera=camera_manager, audio_recorder=audio_recorder)
+
+    # ── 7. Sensor manager ─────────────────────────────────────────────────────
     sensor_manager = SensorManager()
     sensor_manager.start()
     logger.info("[Boot] %s", sensor_manager.status_string())
 
-    # ── 7. Button handler ─────────────────────────────────────────────────────
+    # ── 8. Button handler ─────────────────────────────────────────────────────
     button = ButtonHandler(
         pin             = config['sos_button_pin'],
         on_sos_press    = _on_sos,
@@ -514,17 +526,17 @@ if __name__ == '__main__':
     button.start()
     logger.info("[Boot] Button handler started on pin %d.", config['sos_button_pin'])
 
-    # ── 8. Audio detection ────────────────────────────────────────────────────
+    # ── 9. Audio detection (YAMNet) ────────────────────────────────────────────
     audio_manager = AudioManager()
     audio_manager.start(on_detection=_on_audio_detection)
     logger.info("[Boot] %s", audio_manager.status_string())
 
-    # ── 9. LoRa off-grid backup ───────────────────────────────────────────────
+    # ── 10. LoRa off-grid backup ──────────────────────────────────────────────
     lora_manager = LoRaManager()
     lora_manager.start(on_packet_received=_on_lora_packet)
     logger.info("[Boot] %s", lora_manager.status_string())
 
-    # ── 10. IMU + Heart rate monitor threads ──────────────────────────────────
+    # ── 11. IMU + Heart rate monitor threads ──────────────────────────────────
     threading.Thread(
         target=_imu_monitor,
         args=(sensor_manager,),
@@ -539,7 +551,7 @@ if __name__ == '__main__':
     ).start()
     logger.info("[Boot] Sensor monitor threads started.")
 
-    # ── 11. Keyboard input handler ─────────────────────────────────────────────
+    # ── 12. Keyboard input handler ─────────────────────────────────────────────
     threading.Thread(
         target=_keyboard_handler,
         args=(sensor_manager, audio_manager),
@@ -547,7 +559,7 @@ if __name__ == '__main__':
         daemon=True
     ).start()
 
-    # ── 12. Ready ──────────────────────────────────────────────────────────────
+    # ── 13. Ready ──────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info(" Kavach ARMED — %s", kavach.status_line())
     logger.info(" Triggers active:")
@@ -557,7 +569,8 @@ if __name__ == '__main__':
     logger.info("   IMU fall detected    → SOS")
     logger.info("   Heart rate spike     → SOS")
     logger.info("   Audio danger sound   → SOS (YAMNet)")
-    logger.info("   Camera               → Evidence recording during alerts")
+    logger.info("   Camera               → Video evidence during alerts")
+    logger.info("   Audio Recorder       → Audio evidence during alerts")
     logger.info("   LoRa RX              → Mesh relay")
     logger.info("")
     logger.info(" Keyboard shortcuts (sensors without hardware):")
@@ -566,7 +579,7 @@ if __name__ == '__main__':
     logger.info(" Button functions (SOS / Medical / Safe) → physical GPIO button only")
     logger.info("=" * 60)
 
-    # ── 13. Main thread sleeps — all work is in daemon threads ────────────────
+    # ── 14. Main thread sleeps — all work is in daemon threads ────────────────
     # signal.pause() is Unix-only — use a cross-platform sleep loop instead
     # so the device firmware runs identically on Windows (dev) and Pi (prod).
     try:
@@ -578,6 +591,7 @@ if __name__ == '__main__':
         logger.info("[Boot] Shutting down all subsystems...")
         button.stop()
         camera_manager.shutdown()
+        audio_recorder.shutdown()
         sensor_manager.stop()
         audio_manager.stop()
         lora_manager.stop()

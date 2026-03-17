@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # All others are rejected to prevent malicious uploads.
 ALLOWED_EXTENSIONS = {
     '.h264', '.mp4', '.avi', '.mov',    # video
+    '.wav', '.mp3', '.ogg',             # audio evidence
     '.jpg', '.jpeg', '.png',            # images
     '.txt', '.json', '.log',            # text evidence / logs
     '.sha256',                          # companion hash files

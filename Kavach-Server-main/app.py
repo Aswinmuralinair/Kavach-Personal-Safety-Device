@@ -21,8 +21,9 @@ FIXES APPLIED:
       ?limit=-1 previously bypassed the cap and dumped the entire table.
 """
 
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import os
 import sys
 import json
@@ -62,6 +63,13 @@ UPLOAD_DIR = os.path.join(os.getcwd(), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# App-ready API auth (for future mobile app)
+# Uses itsdangerous (bundled with Flask) for signed tokens — no PyJWT needed.
+# ─────────────────────────────────────────────────────────────────────────────
+app.config['SECRET_KEY'] = os.environ.get('KAVACH_SECRET_KEY', os.urandom(32).hex())
+_token_serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+# ─────────────────────────────────────────────────────────────────────────────
 # FIX ① — use datetime.timezone.utc everywhere instead of datetime.UTC
 # datetime.UTC was only added in Python 3.11; timezone.utc works on 3.2+
 # ─────────────────────────────────────────────────────────────────────────────
@@ -76,6 +84,186 @@ _SERVER_START_TIME = datetime.datetime.now(_UTC)
 # ─────────────────────────────────────────────────────────────────────────────
 def _request_id() -> str:
     return uuid.uuid4().hex[:8].upper()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET / — Admin Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/')
+def dashboard():
+    return render_template('dashboard.html')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# App-ready API — Auth + Role-based endpoints (for future mobile app)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _create_token(device_id: str, role: str) -> str:
+    """Create a signed token containing device_id and role."""
+    return _token_serializer.dumps({'device_id': device_id, 'role': role})
+
+
+def _verify_token(req) -> tuple:
+    """
+    Verify the Authorization: Bearer <token> header.
+    Returns (device_id, role) on success.
+    Raises ValueError with message on failure.
+    """
+    auth = req.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        raise ValueError('Missing or invalid Authorization header. Expected: Bearer <token>')
+    token = auth[7:]
+    try:
+        data = _token_serializer.loads(token, max_age=86400)  # 24-hour expiry
+        return data['device_id'], data['role']
+    except SignatureExpired:
+        raise ValueError('Token expired. Please login again.')
+    except (BadSignature, KeyError):
+        raise ValueError('Invalid token.')
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def auth_login():
+    """
+    Login endpoint for the future mobile app.
+    Accepts: { "device_id": "KAVACH-001", "role": "user"|"guardian" }
+    Returns: { "token": "...", "role": "...", "device_id": "..." }
+    """
+    try:
+        body = request.get_json()
+        if not body:
+            return jsonify({'status': 'error', 'message': 'JSON body required'}), 400
+
+        device_id = body.get('device_id')
+        role      = body.get('role')
+
+        if not device_id:
+            return jsonify({'status': 'error', 'message': 'device_id is required'}), 400
+        if role not in ('user', 'guardian'):
+            return jsonify({'status': 'error', 'message': 'role must be "user" or "guardian"'}), 400
+
+        token = _create_token(device_id, role)
+        return jsonify({
+            'status':    'ok',
+            'token':     token,
+            'role':      role,
+            'device_id': device_id,
+        }), 200
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/user/alerts', methods=['GET'])
+def user_alerts():
+    """All alerts for the authenticated user's device."""
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'user':
+            return jsonify({'status': 'error', 'message': 'User role required'}), 403
+
+        alerts = Alert.query.filter_by(device_id=device_id).order_by(Alert.id.desc()).all()
+        return jsonify({
+            'status': 'ok',
+            'count':  len(alerts),
+            'alerts': [_alert_to_dict(a) for a in alerts],
+        }), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/guardian/alerts', methods=['GET'])
+def guardian_alerts():
+    """Only SOS/MEDICAL alerts for the authenticated guardian's device."""
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'guardian':
+            return jsonify({'status': 'error', 'message': 'Guardian role required'}), 403
+
+        alerts = (Alert.query
+                  .filter_by(device_id=device_id)
+                  .filter(Alert.alert_type.in_(['SOS', 'MEDICAL']))
+                  .order_by(Alert.id.desc())
+                  .all())
+        return jsonify({
+            'status': 'ok',
+            'count':  len(alerts),
+            'alerts': [_alert_to_dict(a) for a in alerts],
+        }), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/user/locations', methods=['GET'])
+def user_locations():
+    """Location history for the authenticated user's device."""
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'user':
+            return jsonify({'status': 'error', 'message': 'User role required'}), 403
+
+        alerts = (Alert.query
+                  .filter_by(device_id=device_id)
+                  .filter(Alert.gps_location.isnot(None))
+                  .order_by(Alert.id.desc())
+                  .all())
+        locations = [{
+            'alert_id':     a.id,
+            'timestamp':    a.timestamp.isoformat() if a.timestamp else None,
+            'gps_location': a.gps_location,
+            'alert_type':   a.alert_type,
+        } for a in alerts]
+
+        return jsonify({'status': 'ok', 'count': len(locations), 'locations': locations}), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/guardian/evidence/<int:alert_id>', methods=['GET'])
+def guardian_evidence(alert_id: int):
+    """Evidence files for a specific alert (guardian role, SOS/MEDICAL only)."""
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'guardian':
+            return jsonify({'status': 'error', 'message': 'Guardian role required'}), 403
+
+        alert = DB.session.get(Alert, alert_id)
+        if not alert:
+            return jsonify({'status': 'error', 'message': 'Alert not found'}), 404
+        if alert.device_id != device_id:
+            return jsonify({'status': 'error', 'message': 'Access denied — wrong device'}), 403
+        if alert.alert_type not in ('SOS', 'MEDICAL'):
+            return jsonify({'status': 'error', 'message': 'Evidence only available for SOS/MEDICAL alerts'}), 403
+
+        evidence = []
+        if alert.uploaded_files:
+            for fname in alert.uploaded_files.split(','):
+                fname = fname.strip()
+                if not fname:
+                    continue
+                fpath = os.path.join(UPLOAD_DIR, fname)
+                evidence.append({
+                    'filename':    fname,
+                    'url':         f'/uploads/{fname}',
+                    'exists':      os.path.exists(fpath),
+                    'size_bytes':  os.path.getsize(fpath) if os.path.exists(fpath) else 0,
+                })
+
+        return jsonify({
+            'status':     'ok',
+            'alert_id':   alert_id,
+            'alert_type': alert.alert_type,
+            'evidence':   evidence,
+        }), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -429,11 +617,15 @@ if __name__ == '__main__':
     logger.info(" Database: kavach.db")
     logger.info(" Upload dir: %s", UPLOAD_DIR)
     logger.info(" Endpoints:")
+    logger.info("   GET  /                  — admin dashboard")
     logger.info("   POST /api/alerts        — receive telemetry")
     logger.info("   GET  /api/alerts        — list all alerts")
     logger.info("   GET  /api/alerts/<id>   — alert detail + hash check")
     logger.info("   GET  /api/health        — server health")
     logger.info("   GET  /uploads/<file>    — serve evidence")
+    logger.info("   POST /api/auth/login    — app auth token")
+    logger.info("   GET  /api/user/alerts   — user alerts (app)")
+    logger.info("   GET  /api/guardian/alerts — guardian alerts (app)")
     logger.info("=" * 55)
 
     # debug=False in production — debug=True exposes the Werkzeug interactive

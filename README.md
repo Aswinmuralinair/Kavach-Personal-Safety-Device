@@ -20,15 +20,16 @@ The project has two parts that run on separate machines:
 
 ## How the Device Works
 
-When you run `python main.py` on the Pi, it starts 7 subsystems simultaneously:
+When you run `python main.py` on the Pi, it starts 8 subsystems simultaneously:
 
 1. **Physical Button** (GPIO 23) — polled 50 times/second for press patterns
 2. **IMU** (BNO055 via I2C) — checks for falls 10 times/second
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
 5. **Pi Camera** (CSI interface via picamera2) — records 30-second H264 evidence clips during alerts
-6. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
-7. **Keyboard** — `f`, `h`, `a` keys to simulate sensors without hardware (for demos)
+6. **Microphone Recorder** (sounddevice) — records 30-second WAV audio evidence during alerts
+7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
+8. **Keyboard** — `f`, `h`, `a` keys to simulate sensors without hardware (for demos)
 
 If any sensor hardware is not connected, the code **auto-detects** and falls back to a simulator that does nothing until triggered by keyboard.
 
@@ -47,18 +48,21 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 ### SOS Sequence
 
 ```
-Step 1 → START CAMERA RECORDING (30-second H264 clips to evidence/)
+Step 1 → START CAMERA + MICROPHONE RECORDING (30-sec video + audio clips to evidence/)
 Step 2 → CALL POLICE (rings 15 seconds, hangs up)
 Step 3 → SMS to guardian: "SOS ALERT - Emergency triggered"
-Step 4 → Get location (GPS first, cell tower fallback if GPS fails)
+Step 4 → WhatsApp alert: location + help message (via CallMeBot)
+Step 5 → Get location (GPS first, cell tower fallback if GPS fails)
          → SMS: "Location: https://maps.google.com/?q=12.97,77.59"
-Step 5 → LOOP every 60 seconds until cancelled:
+Step 6 → LOOP every 60 seconds until cancelled:
+           ├── Check battery (WhatsApp alert if < 15%, once per boot)
+           ├── Retry any queued failed uploads
            ├── Get location (5 GPS attempts → cell tower fallback)
            ├── Send updated GPS/tower location SMS
            ├── Send battery percentage SMS
            ├── Encrypt + upload new evidence files to server
-           └── SMS guardian the download link
-Step 6 → Long press button → STOP CAMERA → SMS: "I AM SAFE, alert cancelled"
+           └── SMS guardian the download link (queue if server unreachable)
+Step 7 → Long press button → STOP CAMERA + MIC → SMS: "I AM SAFE, alert cancelled"
          → Device returns to IDLE
 ```
 
@@ -83,11 +87,17 @@ The server is a Flask web app with these endpoints:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
+| `GET` | `/` | Admin web dashboard (map + stats + alerts table) |
 | `POST` | `/api/alerts` | Receive encrypted telemetry + encrypted evidence from device |
-| `GET` | `/api/alerts` | List all alerts (for a dashboard) |
+| `GET` | `/api/alerts` | List all alerts (for dashboard) |
 | `GET` | `/api/alerts/<id>` | Single alert detail with file integrity verification |
 | `GET` | `/api/health` | Server + database health check |
-| `GET` | `/uploads/<file>` | Serve decrypted evidence files (guardian clicks SMS link) |
+| `GET` | `/uploads/<file>` | Serve decrypted evidence files |
+| `POST` | `/api/auth/login` | Get auth token for mobile app |
+| `GET` | `/api/user/alerts` | User's alerts (token auth) |
+| `GET` | `/api/guardian/alerts` | Guardian's SOS/MEDICAL alerts (token auth) |
+| `GET` | `/api/user/locations` | Location history (token auth) |
+| `GET` | `/api/guardian/evidence/<id>` | Evidence files for alert (token auth) |
 
 When the device sends data:
 1. Server receives the encrypted telemetry payload
@@ -165,7 +175,9 @@ Open `Personal-Safety-Device-main/config.json`:
   "medical_number": "+919876543211",
   "server_url": "http://192.168.1.50:8080/api/alerts",
   "server_public_url": "http://192.168.1.50:8080/uploads/",
-  "evidence_dir": "evidence"
+  "evidence_dir": "evidence",
+  "whatsapp_number": "+919876543210",
+  "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY"
 }
 ```
 
@@ -174,6 +186,8 @@ Replace:
 - `medical_number` — a medical contact's number
 - `192.168.1.50` — your server PC's actual IP address
 - `serial_port` — check with `ls /dev/ttyUSB*` after plugging in the SIM7600
+- `whatsapp_number` — your WhatsApp number with country code (for alerts)
+- `whatsapp_apikey` — your CallMeBot API key (see WhatsApp setup in Features section)
 
 ### 5. Download the Audio AI Model (on the Pi, once)
 
@@ -224,11 +238,15 @@ Expected output:
 Kavach Server v2.0 starting
 Database: kavach.db
 Upload dir: ...\uploads
+GET  /                  — admin dashboard
 POST /api/alerts        — receive telemetry
+GET  /api/alerts        — list all alerts
 GET  /api/health        — server health
+GET  /uploads/<file>    — serve evidence
+POST /api/auth/login    — app auth token
 ```
 
-Verify: open `http://localhost:8080/api/health` in your browser. You should see `"status": "ok"`.
+Verify: open `http://localhost:8080/` in your browser to see the admin dashboard, or `http://localhost:8080/api/health` for a health check.
 
 ### Start the Device (on the Raspberry Pi)
 
@@ -247,7 +265,8 @@ Triggers active:
   IMU fall detected    → SOS
   Heart rate spike     → SOS
   Audio danger sound   → SOS (YAMNet)
-  Camera               → Evidence recording during alerts
+  Camera               → Video evidence recording during alerts
+  Microphone           → Audio evidence recording during alerts
   LoRa RX              → Mesh relay
 
 Keyboard shortcuts (sensors without hardware):
@@ -275,9 +294,9 @@ Button functions (SOS / Medical / Safe) → physical GPIO button only
 | 11 | **Long press** to cancel | |
 | 12 | **Double tap** the button quickly | MEDICAL alert: calls medical number |
 | 13 | **Long press** to cancel | |
-| 14 | Open `http://<server-ip>:8080/api/alerts` | Show all alerts stored in database |
+| 14 | Open `http://<server-ip>:8080/` | Show admin dashboard with map, stats, and alerts |
 | 15 | Open `http://<server-ip>:8080/api/alerts/1` | Show SHA-256 hash verification of evidence |
-| 16 | Open `http://<server-ip>:8080/uploads/<filename>` | Show actual evidence file (decrypted video/image) |
+| 16 | Open `http://<server-ip>:8080/uploads/<filename>` | Show actual evidence file (decrypted video/audio) |
 
 **Remember:** Cancel each alert with a **long press** before triggering the next one — only one alert can run at a time.
 
@@ -301,6 +320,8 @@ Kavach/
 │   │   ├── audio.py                ← YAMNet microphone listener
 │   │   ├── button.py               ← GPIO button with single/double/long press
 │   │   ├── camera.py               ← Pi Camera: 30-sec H264 clip recording
+│   │   ├── audio_recorder.py       ← Microphone: 30-sec WAV clip recording
+│   │   ├── whatsapp.py             ← CallMeBot WhatsApp API wrapper
 │   │   ├── lora.py                 ← SX1278 LoRa mesh radio
 │   │   └── power.py                ← INA219 battery voltage monitor
 │   ├── models/                     ← YAMNet TFLite model (after setup_audio.py)
@@ -309,11 +330,13 @@ Kavach/
 │       └── chacha.key              ← Shared encryption key
 │
 ├── Kavach-Server-main/             ← Runs on server PC (Windows)
-│   ├── app.py                      ← Flask API (receive, decrypt, store, serve)
+│   ├── app.py                      ← Flask API (receive, decrypt, store, serve, dashboard)
 │   ├── database.py                 ← SQLAlchemy models (Alert table)
 │   ├── crypto_utils.py             ← ChaCha20-Poly1305 decryption (text + file bytes)
 │   ├── utils.py                    ← File saving, decryption, SHA-256 hashing
 │   ├── Requirements.txt            ← Python dependencies
+│   ├── templates/
+│   │   └── dashboard.html          ← Admin web dashboard (Leaflet.js map + stats)
 │   ├── uploads/                    ← Decrypted evidence files
 │   └── keys/
 │       └── chacha.key              ← Same shared encryption key
@@ -323,10 +346,68 @@ Kavach/
 
 ---
 
+## New Features (v3.0)
+
+### 1. Admin Web Dashboard
+Open `http://<server-ip>:8080/` in your browser to see:
+- **Stats bar** — total alerts, SOS count, medical count, active devices, evidence files
+- **Live map** — Leaflet.js + OpenStreetMap with colored markers (red=SOS, purple=MEDICAL, cyan=other)
+- **Recent alerts table** — top 10 alerts with clickable GPS and evidence links
+- **Full alerts table** — all alerts with detailed info
+- **Auto-refresh** every 30 seconds
+
+### 2. App-ready API Endpoints
+REST API endpoints ready for a future mobile app:
+
+| Method | Endpoint | Auth | Purpose |
+|--------|----------|------|---------|
+| `POST` | `/api/auth/login` | None | Get auth token (device_id + role) |
+| `GET` | `/api/user/alerts` | User token | All alerts for the user's device |
+| `GET` | `/api/guardian/alerts` | Guardian token | SOS/MEDICAL alerts only |
+| `GET` | `/api/user/locations` | User token | Location history |
+| `GET` | `/api/guardian/evidence/<id>` | Guardian token | Evidence files for an alert |
+
+Tokens are signed with itsdangerous (bundled with Flask) and expire after 24 hours.
+
+### 3. Audio Evidence Recording
+During SOS/MEDICAL alerts, the microphone records 30-second `.wav` clips alongside camera video:
+- 16 kHz mono, 16-bit PCM
+- Saved to `evidence/` folder
+- Encrypted and uploaded with other evidence files
+- Uses `sounddevice` library — falls back to `FakeAudioRecorder` if no mic detected
+
+### 4. Offline Upload Queue
+If the server is unreachable during an alert:
+- Failed uploads are queued in memory
+- Each 60-second update cycle retries queued uploads first
+- Successfully retried uploads are removed from queue
+- Queue resets on device restart (by design — no stale data)
+
+### 5. Low Battery WhatsApp Alert
+When battery drops below 15%:
+- Sends a WhatsApp message to the configured number via CallMeBot API
+- Sent **once per boot** to avoid spam (resets on restart)
+- Skipped if WhatsApp is not configured
+
+### 6. WhatsApp Alerts for SOS/MEDICAL
+During SOS and MEDICAL alerts:
+- Sends location + help message via WhatsApp (CallMeBot API)
+- **Only sends location and help message** — no video/evidence on WhatsApp
+- Gracefully skips if `whatsapp_number` or `whatsapp_apikey` are placeholder values
+
+**WhatsApp Setup (one-time):**
+1. Save `+34 644 51 95 23` in your phone as "CallMeBot"
+2. Send "I allow callmebot to send me messages" on WhatsApp to that number
+3. You'll receive an API key
+4. Put the API key in `config.json` → `"whatsapp_apikey"`
+5. Put your WhatsApp number in `config.json` → `"whatsapp_number"` (e.g. `"+919876543210"`)
+
+---
+
 ## Security Features
 
 - **End-to-end encryption** — All telemetry AND evidence files encrypted with ChaCha20-Poly1305
-- **Evidence file encryption** — Video clips and images are encrypted before leaving the Pi
+- **Evidence file encryption** — Video clips, audio clips, and images are encrypted before leaving the Pi
 - **Evidence integrity** — SHA-256 hashes of original files sent alongside; server verifies after decryption
 - **Live re-verification** — Server re-computes hashes on demand when viewing an alert detail
 - **No plaintext in transit** — GPS coordinates, alert type, battery status, AND evidence files are all encrypted

@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kavach Admin Dashboard</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-card: #16213e;
+            --bg-hover: #1f2b47;
+            --accent: #00d4ff;
+            --accent-dim: #0a7ea4;
+            --danger: #ff4757;
+            --success: #2ed573;
+            --warning: #ffa502;
+            --medical: #a855f7;
+            --text-primary: #e8e8e8;
+            --text-secondary: #8892a4;
+            --text-muted: #5a6273;
+            --border: #2a2a4a;
+            --radius: 12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* ── Header ─────────────────────────────────────────────── */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; }
+        .header h1 {
+            font-size: 22px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), #7c3aed);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .header-badge {
+            background: var(--bg-card);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .refresh-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .pulse-dot {
+            width: 8px; height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* ── Stats Bar ──────────────────────────────────────────── */
+        .stats-bar {
+            display: flex;
+            gap: 16px;
+            padding: 20px 32px;
+            overflow-x: auto;
+        }
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px 24px;
+            min-width: 160px;
+            flex: 1;
+        }
+        .stat-card .label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+        .stat-card .value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+        .stat-card .value.sos { color: var(--danger); }
+        .stat-card .value.medical { color: var(--medical); }
+        .stat-card .value.total { color: var(--accent); }
+        .stat-card .value.devices { color: var(--success); }
+
+        /* ── Main Layout ────────────────────────────────────────── */
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 0 32px 32px;
+        }
+        @media (max-width: 1200px) {
+            .main-content { grid-template-columns: 1fr; }
+        }
+
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+        .panel-header {
+            padding: 14px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* ── Map ────────────────────────────────────────────────── */
+        #map {
+            height: 450px;
+            width: 100%;
+            background: var(--bg-primary);
+        }
+
+        /* ── Table ──────────────────────────────────────────────── */
+        .table-container {
+            max-height: 450px;
+            overflow-y: auto;
+        }
+        .table-container::-webkit-scrollbar { width: 6px; }
+        .table-container::-webkit-scrollbar-track { background: var(--bg-card); }
+        .table-container::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        thead th {
+            position: sticky;
+            top: 0;
+            background: var(--bg-secondary);
+            padding: 10px 12px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+        tbody td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-primary);
+            white-space: nowrap;
+        }
+        tbody tr:hover { background: var(--bg-hover); }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge-sos {
+            background: rgba(255, 71, 87, 0.15);
+            color: var(--danger);
+            border: 1px solid rgba(255, 71, 87, 0.3);
+        }
+        .badge-medical {
+            background: rgba(168, 85, 247, 0.15);
+            color: var(--medical);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+        }
+        .badge-safe {
+            background: rgba(46, 213, 115, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(46, 213, 115, 0.3);
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        .status-dot.on { background: var(--success); }
+        .status-dot.off { background: var(--text-muted); }
+
+        .evidence-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-size: 12px;
+        }
+        .evidence-link:hover {
+            text-decoration: underline;
+        }
+
+        .gps-link {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .gps-link:hover { text-decoration: underline; }
+
+        /* ── Full-width table below ─────────────────────────────── */
+        .full-width {
+            padding: 0 32px 32px;
+        }
+        .full-width .panel {
+            width: 100%;
+        }
+        .full-width .table-container {
+            max-height: 500px;
+        }
+
+        /* ── Empty state ────────────────────────────────────────── */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+
+        /* ── Leaflet marker overrides ───────────────────────────── */
+        .leaflet-popup-content-wrapper {
+            background: var(--bg-secondary) !important;
+            color: var(--text-primary) !important;
+            border-radius: 8px !important;
+            border: 1px solid var(--border) !important;
+        }
+        .leaflet-popup-tip { background: var(--bg-secondary) !important; }
+        .leaflet-popup-content { font-size: 13px; line-height: 1.5; }
+    </style>
+</head>
+<body>
+
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <h1>KAVACH</h1>
+            <span class="header-badge">Admin Dashboard</span>
+        </div>
+        <div class="refresh-info">
+            <span class="pulse-dot"></span>
+            <span>Auto-refresh every 30s</span>
+            <span id="lastUpdate" style="margin-left: 8px; color: var(--text-secondary);"></span>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-bar">
+        <div class="stat-card">
+            <div class="label">Total Alerts</div>
+            <div class="value total" id="statTotal">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">SOS Alerts</div>
+            <div class="value sos" id="statSOS">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Medical Alerts</div>
+            <div class="value medical" id="statMedical">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Devices</div>
+            <div class="value devices" id="statDevices">-</div>
+        </div>
+        <div class="stat-card">
+            <div class="label">Evidence Files</div>
+            <div class="value total" id="statFiles">-</div>
+        </div>
+    </div>
+
+    <!-- Map + Recent -->
+    <div class="main-content">
+        <div class="panel">
+            <div class="panel-header">
+                <span>Alert Locations</span>
+                <span id="mapCount" style="color: var(--text-muted); font-size: 12px;"></span>
+            </div>
+            <div id="map"></div>
+        </div>
+        <div class="panel">
+            <div class="panel-header">
+                <span>Recent Alerts</span>
+                <span id="recentCount" style="color: var(--text-muted); font-size: 12px;"></span>
+            </div>
+            <div class="table-container" id="recentTable">
+                <div class="empty-state">
+                    <div class="icon">&#128225;</div>
+                    <div>Loading alerts...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Full Alert Table -->
+    <div class="full-width">
+        <div class="panel">
+            <div class="panel-header">
+                <span>All Alerts</span>
+                <span id="allCount" style="color: var(--text-muted); font-size: 12px;"></span>
+            </div>
+            <div class="table-container" id="allTable">
+                <div class="empty-state">
+                    <div class="icon">&#128202;</div>
+                    <div>Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // ── Leaflet Map Init ─────────────────────────────────────────
+    const map = L.map('map', {
+        zoomControl: true,
+        attributionControl: false
+    }).setView([20.5937, 78.9629], 5); // India center
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19,
+    }).addTo(map);
+
+    const markers = L.layerGroup().addTo(map);
+
+    // Custom marker icons
+    function makeIcon(color) {
+        return L.divIcon({
+            html: `<div style="
+                width: 14px; height: 14px;
+                background: ${color};
+                border: 2px solid white;
+                border-radius: 50%;
+                box-shadow: 0 0 8px ${color}80;
+            "></div>`,
+            iconSize: [14, 14],
+            iconAnchor: [7, 7],
+            className: ''
+        });
+    }
+    const sosIcon = makeIcon('#ff4757');
+    const medicalIcon = makeIcon('#a855f7');
+    const defaultIcon = makeIcon('#00d4ff');
+
+    // ── Helpers ──────────────────────────────────────────────────
+    function formatTime(iso) {
+        if (!iso) return '-';
+        const d = new Date(iso);
+        return d.toLocaleString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: true
+        });
+    }
+
+    function typeBadge(type) {
+        if (!type) return '<span class="badge">-</span>';
+        const t = type.toUpperCase();
+        if (t === 'SOS') return '<span class="badge badge-sos">SOS</span>';
+        if (t === 'MEDICAL') return '<span class="badge badge-medical">MEDICAL</span>';
+        return `<span class="badge badge-safe">${t}</span>`;
+    }
+
+    function statusDot(val) {
+        return `<span class="status-dot ${val ? 'on' : 'off'}"></span>${val ? 'Yes' : 'No'}`;
+    }
+
+    function evidenceLinks(files) {
+        if (!files) return '-';
+        return files.split(',').filter(f => f.trim()).map(f => {
+            const name = f.trim();
+            const short = name.length > 20 ? name.substring(0, 20) + '...' : name;
+            return `<a href="/uploads/${name}" target="_blank" class="evidence-link">${short}</a>`;
+        }).join('<br>');
+    }
+
+    function gpsLink(loc) {
+        if (!loc) return '<span style="color: var(--text-muted);">-</span>';
+        try {
+            const [lat, lon] = loc.split(',').map(Number);
+            if (isNaN(lat) || isNaN(lon)) return loc;
+            return `<a href="https://maps.google.com/?q=${lat},${lon}" target="_blank" class="gps-link">${lat.toFixed(4)}, ${lon.toFixed(4)}</a>`;
+        } catch (e) {
+            return loc;
+        }
+    }
+
+    function parseGPS(loc) {
+        if (!loc) return null;
+        try {
+            const [lat, lon] = loc.split(',').map(Number);
+            if (isNaN(lat) || isNaN(lon)) return null;
+            return [lat, lon];
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // ── Build Tables ─────────────────────────────────────────────
+    function buildRecentTable(alerts) {
+        if (!alerts.length) {
+            return `<div class="empty-state"><div class="icon">&#128225;</div><div>No alerts yet</div></div>`;
+        }
+        const recent = alerts.slice(0, 10);
+        let html = `<table><thead><tr>
+            <th>Time</th><th>Type</th><th>Trigger</th><th>Location</th><th>Battery</th>
+        </tr></thead><tbody>`;
+        for (const a of recent) {
+            html += `<tr>
+                <td>${formatTime(a.timestamp)}</td>
+                <td>${typeBadge(a.alert_type)}</td>
+                <td>${a.trigger_source || '-'}</td>
+                <td>${gpsLink(a.gps_location)}</td>
+                <td>${a.battery_percentage || '-'}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        return html;
+    }
+
+    function buildFullTable(alerts) {
+        if (!alerts.length) {
+            return `<div class="empty-state"><div class="icon">&#128202;</div><div>No alerts in database</div></div>`;
+        }
+        let html = `<table><thead><tr>
+            <th>ID</th><th>Time</th><th>Device</th><th>Type</th><th>Trigger</th>
+            <th>Location</th><th>Battery</th><th>Call</th><th>SMS</th><th>Evidence</th>
+        </tr></thead><tbody>`;
+        for (const a of alerts) {
+            html += `<tr>
+                <td>#${a.id}</td>
+                <td>${formatTime(a.timestamp)}</td>
+                <td>${a.device_id}</td>
+                <td>${typeBadge(a.alert_type)}</td>
+                <td>${a.trigger_source || '-'}</td>
+                <td>${gpsLink(a.gps_location)}</td>
+                <td>${a.battery_percentage || '-'}</td>
+                <td>${statusDot(a.call_placed_status)}</td>
+                <td>${statusDot(a.guardian_sms_status)}</td>
+                <td>${evidenceLinks(a.uploaded_files)}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        return html;
+    }
+
+    // ── Fetch & Render ───────────────────────────────────────────
+    async function loadAlerts() {
+        try {
+            const res = await fetch('/api/alerts?limit=200');
+            const data = await res.json();
+            if (data.status !== 'ok') return;
+
+            const alerts = data.alerts;
+
+            // Stats
+            document.getElementById('statTotal').textContent = alerts.length;
+            document.getElementById('statSOS').textContent = alerts.filter(a => a.alert_type === 'SOS').length;
+            document.getElementById('statMedical').textContent = alerts.filter(a => a.alert_type === 'MEDICAL').length;
+            const devices = new Set(alerts.map(a => a.device_id));
+            document.getElementById('statDevices').textContent = devices.size;
+            const totalFiles = alerts.reduce((sum, a) => {
+                return sum + (a.uploaded_files ? a.uploaded_files.split(',').filter(f => f.trim()).length : 0);
+            }, 0);
+            document.getElementById('statFiles').textContent = totalFiles;
+
+            // Tables
+            document.getElementById('recentTable').innerHTML = buildRecentTable(alerts);
+            document.getElementById('recentCount').textContent = `Showing ${Math.min(alerts.length, 10)} of ${alerts.length}`;
+            document.getElementById('allTable').innerHTML = buildFullTable(alerts);
+            document.getElementById('allCount').textContent = `${alerts.length} alerts`;
+
+            // Map markers
+            markers.clearLayers();
+            let markerCount = 0;
+            const bounds = [];
+            for (const a of alerts) {
+                const coords = parseGPS(a.gps_location);
+                if (!coords) continue;
+                const icon = a.alert_type === 'SOS' ? sosIcon :
+                             a.alert_type === 'MEDICAL' ? medicalIcon : defaultIcon;
+                const marker = L.marker(coords, { icon: icon });
+                marker.bindPopup(`
+                    <strong>${a.alert_type || 'ALERT'}</strong> — #${a.id}<br>
+                    <strong>Device:</strong> ${a.device_id}<br>
+                    <strong>Trigger:</strong> ${a.trigger_source || '-'}<br>
+                    <strong>Time:</strong> ${formatTime(a.timestamp)}<br>
+                    <strong>Battery:</strong> ${a.battery_percentage || '-'}<br>
+                    <strong>Location:</strong> ${a.gps_location}
+                `);
+                markers.addLayer(marker);
+                bounds.push(coords);
+                markerCount++;
+            }
+            document.getElementById('mapCount').textContent = `${markerCount} locations`;
+            if (bounds.length > 0) {
+                map.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+            }
+
+            // Last update time
+            document.getElementById('lastUpdate').textContent =
+                'Updated ' + new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+        } catch (err) {
+            console.error('Failed to load alerts:', err);
+        }
+    }
+
+    // Initial load + auto-refresh every 30s
+    loadAlerts();
+    setInterval(loadAlerts, 30000);
+</script>
+
+</body>
+</html>
