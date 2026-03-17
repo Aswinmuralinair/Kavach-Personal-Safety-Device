@@ -1,11 +1,13 @@
 """
 utils.py — Kavach Server
 
-File saving and SHA-256 hash helpers.
+File saving, SHA-256 hash helpers, and evidence file decryption.
 
 FIXES APPLIED:
   - `str | None` return type replaced with `Optional[str]` for Python 3.9
     compatibility (`X | Y` union syntax in annotations requires Python 3.10+).
+  - Added decrypt_file_in_place() to handle encrypted evidence files from the
+    device.  The device encrypts evidence with ChaCha20-Poly1305 before upload.
 """
 
 import os
@@ -84,6 +86,39 @@ def compute_sha256(file_path: str) -> str:
     except Exception as exc:
         logger.error("[Utils] compute_sha256 error: %s", exc)
         return ""
+
+
+def decrypt_file_in_place(file_path: str) -> bool:
+    """
+    Decrypt a ChaCha20-Poly1305 encrypted evidence file, overwriting it
+    with the plaintext.
+
+    The device encrypts evidence files (video, images) before upload.
+    This function is called server-side after saving, before hash
+    verification.
+
+    Returns True on success, False on failure (file is left as-is).
+    """
+    from crypto_utils import chacha_decrypt_bytes
+    try:
+        with open(file_path, 'rb') as f:
+            encrypted_data = f.read()
+        decrypted_data = chacha_decrypt_bytes(encrypted_data)
+        with open(file_path, 'wb') as f:
+            f.write(decrypted_data)
+        logger.info(
+            "[Utils] Decrypted evidence file: %s (%d → %d bytes)",
+            os.path.basename(file_path),
+            len(encrypted_data),
+            len(decrypted_data),
+        )
+        return True
+    except Exception as exc:
+        logger.error(
+            "[Utils] Decryption FAILED for %s: %s",
+            os.path.basename(file_path), exc
+        )
+        return False
 
 
 def verify_file_hash(file_path: str, expected_hash: str) -> bool:

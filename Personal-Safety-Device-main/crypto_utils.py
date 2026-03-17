@@ -49,6 +49,30 @@ def chacha_decrypt_text(encrypted_data: bytes) -> str:
     return plaintext.decode()
 
 
+def chacha_encrypt_bytes(data: bytes) -> bytes:
+    """Encrypt raw bytes with ChaCha20-Poly1305.
+    Returns: 12-byte nonce + ciphertext (with 16-byte Poly1305 tag).
+
+    Used to encrypt evidence files (video clips, images) before uploading
+    to the server.  The server calls chacha_decrypt_bytes() to recover
+    the original file.
+    """
+    key    = _load_chacha_key()
+    chacha = ChaCha20Poly1305(key)
+    nonce  = os.urandom(12)
+    ciphertext = chacha.encrypt(nonce, data, None)
+    return nonce + ciphertext
+
+
+def chacha_decrypt_bytes(encrypted_data: bytes) -> bytes:
+    """Decrypt raw bytes produced by chacha_encrypt_bytes()."""
+    key        = _load_chacha_key()
+    chacha     = ChaCha20Poly1305(key)
+    nonce      = encrypted_data[:12]
+    ciphertext = encrypted_data[12:]
+    return chacha.decrypt(nonce, ciphertext, None)
+
+
 if __name__ == "__main__":
     msg = "KAVACH DEVICE TEST — ChaCha20"
     enc = chacha_encrypt_text(msg)

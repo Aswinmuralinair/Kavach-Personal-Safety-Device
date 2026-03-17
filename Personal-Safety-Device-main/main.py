@@ -56,6 +56,7 @@ from hardware.sensors import SensorManager
 from hardware.audio   import AudioManager, DetectionEvent
 from hardware.lora    import LoRaManager, LoRaPacket
 from hardware.comms   import SIM7600
+from hardware.camera  import CameraManager
 from alerts import sos_sequence, medical_sequence, safe_sequence
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -103,11 +104,12 @@ class KavachStateMachine:
       before this machine is started.
     """
 
-    def __init__(self, sim: SIM7600):
+    def __init__(self, sim: SIM7600, camera: CameraManager = None):
         self._state      = DeviceState.IDLE
         self._lock       = threading.Lock()
         self._alert_type = None   # "sos" | "medical" | None
         self._sim        = sim    # shared serial port — never re-opened
+        self._camera     = camera # shared camera — records evidence during alerts
 
     # ── Public properties ─────────────────────────────────────────────────────
     @property
@@ -159,10 +161,10 @@ class KavachStateMachine:
         # Launch the alert sequence in a daemon thread (outside the lock)
         if alert_type == "sos":
             target = sos_sequence
-            kwargs = {"sim": self._sim, "trigger_source": trigger_source}
+            kwargs = {"sim": self._sim, "trigger_source": trigger_source, "camera": self._camera}
         elif alert_type == "medical":
             target = medical_sequence
-            kwargs = {"sim": self._sim}
+            kwargs = {"sim": self._sim, "camera": self._camera}
         else:
             logger.error("[StateMachine] Unknown alert_type: '%s'", alert_type)
             with self._lock:
@@ -212,7 +214,7 @@ class KavachStateMachine:
 
         threading.Thread(
             target=safe_sequence,
-            kwargs={"sim": self._sim, "was_active_type": was_active},
+            kwargs={"sim": self._sim, "was_active_type": was_active, "camera": self._camera},
             name="Safe",
             daemon=True
         ).start()
@@ -488,15 +490,21 @@ if __name__ == '__main__':
     sim = SIM7600(port=config['serial_port'], baud=config['baud_rate'])
     logger.info("[Boot] SIM7600 initialized on %s.", config['serial_port'])
 
-    # ── 4. State machine — inject the shared sim ──────────────────────────────
-    kavach = KavachStateMachine(sim=sim)
+    # ── 4. Camera manager ─────────────────────────────────────────────────────
+    evidence_dir = os.path.join(BASE_DIR, config.get('evidence_dir', 'evidence'))
+    os.makedirs(evidence_dir, exist_ok=True)
+    camera_manager = CameraManager(evidence_dir=evidence_dir)
+    logger.info("[Boot] %s", camera_manager.status_string())
 
-    # ── 5. Sensor manager ─────────────────────────────────────────────────────
+    # ── 5. State machine — inject the shared sim + camera ───────────────────
+    kavach = KavachStateMachine(sim=sim, camera=camera_manager)
+
+    # ── 6. Sensor manager ─────────────────────────────────────────────────────
     sensor_manager = SensorManager()
     sensor_manager.start()
     logger.info("[Boot] %s", sensor_manager.status_string())
 
-    # ── 6. Button handler ─────────────────────────────────────────────────────
+    # ── 7. Button handler ─────────────────────────────────────────────────────
     button = ButtonHandler(
         pin             = config['sos_button_pin'],
         on_sos_press    = _on_sos,
@@ -506,17 +514,17 @@ if __name__ == '__main__':
     button.start()
     logger.info("[Boot] Button handler started on pin %d.", config['sos_button_pin'])
 
-    # ── 7. Audio detection ────────────────────────────────────────────────────
+    # ── 8. Audio detection ────────────────────────────────────────────────────
     audio_manager = AudioManager()
     audio_manager.start(on_detection=_on_audio_detection)
     logger.info("[Boot] %s", audio_manager.status_string())
 
-    # ── 8. LoRa off-grid backup ───────────────────────────────────────────────
+    # ── 9. LoRa off-grid backup ───────────────────────────────────────────────
     lora_manager = LoRaManager()
     lora_manager.start(on_packet_received=_on_lora_packet)
     logger.info("[Boot] %s", lora_manager.status_string())
 
-    # ── 9. IMU + Heart rate monitor threads ───────────────────────────────────
+    # ── 10. IMU + Heart rate monitor threads ──────────────────────────────────
     threading.Thread(
         target=_imu_monitor,
         args=(sensor_manager,),
@@ -531,7 +539,7 @@ if __name__ == '__main__':
     ).start()
     logger.info("[Boot] Sensor monitor threads started.")
 
-    # ── 10. Keyboard input handler ─────────────────────────────────────────────
+    # ── 11. Keyboard input handler ─────────────────────────────────────────────
     threading.Thread(
         target=_keyboard_handler,
         args=(sensor_manager, audio_manager),
@@ -539,7 +547,7 @@ if __name__ == '__main__':
         daemon=True
     ).start()
 
-    # ── 11. Ready ──────────────────────────────────────────────────────────────
+    # ── 12. Ready ──────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info(" Kavach ARMED — %s", kavach.status_line())
     logger.info(" Triggers active:")
@@ -549,6 +557,7 @@ if __name__ == '__main__':
     logger.info("   IMU fall detected    → SOS")
     logger.info("   Heart rate spike     → SOS")
     logger.info("   Audio danger sound   → SOS (YAMNet)")
+    logger.info("   Camera               → Evidence recording during alerts")
     logger.info("   LoRa RX              → Mesh relay")
     logger.info("")
     logger.info(" Keyboard shortcuts (sensors without hardware):")
@@ -557,7 +566,7 @@ if __name__ == '__main__':
     logger.info(" Button functions (SOS / Medical / Safe) → physical GPIO button only")
     logger.info("=" * 60)
 
-    # ── 12. Main thread sleeps — all work is in daemon threads ────────────────
+    # ── 13. Main thread sleeps — all work is in daemon threads ────────────────
     # signal.pause() is Unix-only — use a cross-platform sleep loop instead
     # so the device firmware runs identically on Windows (dev) and Pi (prod).
     try:
@@ -568,6 +577,7 @@ if __name__ == '__main__':
     finally:
         logger.info("[Boot] Shutting down all subsystems...")
         button.stop()
+        camera_manager.shutdown()
         sensor_manager.stop()
         audio_manager.stop()
         lora_manager.stop()

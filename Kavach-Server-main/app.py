@@ -32,7 +32,7 @@ import datetime
 import uuid
 
 from database import DB, Alert
-from utils import save_file_safe, compute_sha256
+from utils import save_file_safe, compute_sha256, decrypt_file_in_place
 from crypto_utils import chacha_decrypt_text
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,12 +136,21 @@ def receive_alert():
         saved_filenames = []
         hash_results = {}   # filename → {"expected": str, "computed": str, "verified": bool}
 
+        # Check if the device sent encrypted evidence files
+        evidence_encrypted = request.form.get('file_encrypted', '').lower() == 'true'
+
         for field_name in files:
             f    = files[field_name]
             path = save_file_safe(f, UPLOAD_DIR)
             if not path:
                 logger.warning("[%s] Could not save file: %s", rid, field_name)
                 continue
+
+            # Decrypt evidence file if the device encrypted it
+            if evidence_encrypted:
+                if not decrypt_file_in_place(path):
+                    logger.error("[%s] Failed to decrypt evidence file: %s — skipping.", rid, field_name)
+                    continue
 
             fname = os.path.basename(path)
             saved_filenames.append(fname)

@@ -22,6 +22,14 @@ FIXES APPLIED:
       port on shutdown (called from main.py's finally block).
 
   ⑤ Replaced bare print() calls with proper logging.
+
+  ⑥ Cell tower location fallback — when GPS fix fails, uses AT+CLBS=4,1 to
+      get approximate location from cell towers (100-2000m accuracy).
+
+  ⑦ Evidence file encryption — upload_alert() now encrypts the evidence file
+      bytes with ChaCha20-Poly1305 before uploading + sends SHA-256 hash of
+      the original plaintext file so the server can verify integrity after
+      decryption.
 """
 
 import serial
@@ -29,6 +37,8 @@ import time
 import json
 import base64
 import os
+import io
+import hashlib
 import logging
 import requests
 
@@ -143,22 +153,70 @@ class SIM7600:
             time.sleep(2)
 
         if not coordinates:
-            logger.warning("[SIM7600] Failed to get GPS fix after 15 attempts.")
+            logger.warning("[SIM7600] Failed to get GPS fix after 15 attempts — trying cell tower fallback.")
+            coordinates = self._get_cell_tower_location()
+            if coordinates:
+                logger.info("[SIM7600] Cell tower location acquired: %s", coordinates)
+            else:
+                logger.warning("[SIM7600] Cell tower fallback also failed — no location available.")
 
         self._send_command('AT+CGPS=0', 'OK', 1)
         return coordinates
 
+    # ── Cell tower location fallback ─────────────────────────────────────────
+    def _get_cell_tower_location(self):
+        """
+        Use SIM7600's AT+CLBS command for cell tower triangulation.
+        Returns "lat,lon" string or None on failure.
+        Accuracy: typically 100-2000 metres (approximate, network dependent).
+
+        FIX ⑥: Called automatically when GPS fix fails.
+
+        NOTE: AT+CLBS=4,1 response format from SIM7600:
+            +CLBS: 0,<longitude>,<latitude>,<accuracy>
+        Longitude comes FIRST — this is a known quirk of the SIM7600.
+        We swap them to return "lat,lon" matching the GPS return format.
+        """
+        if not self.ser:
+            return None
+        try:
+            # AT+CLBS=4,1 → base station location via network
+            success, response = self._send_command('AT+CLBS=4,1', '+CLBS:', 10)
+            if success:
+                clbs_data = response.split('+CLBS:')[1].strip().split(',')
+                error_code = int(clbs_data[0].strip())
+                if error_code == 0 and len(clbs_data) >= 3:
+                    # SIM7600 returns longitude first, latitude second
+                    longitude = float(clbs_data[1].strip())
+                    latitude  = float(clbs_data[2].strip())
+                    accuracy  = clbs_data[3].strip() if len(clbs_data) > 3 else "unknown"
+                    logger.info(
+                        "[SIM7600] Cell tower fix: lat=%.6f lon=%.6f accuracy=%sm (TOWER)",
+                        latitude, longitude, accuracy
+                    )
+                    return f"{latitude},{longitude}"
+                else:
+                    logger.warning("[SIM7600] CLBS error code: %d", error_code)
+            return None
+        except Exception as e:
+            logger.error("[SIM7600] Cell tower location error: %s", e)
+            return None
+
     # ── Evidence upload ───────────────────────────────────────────────────────
     def upload_alert(self, server_url, alert_object, file_path):
         """
-        Encrypts the alert telemetry and uploads it together with an evidence
-        file to the Flask server.
+        Encrypts the alert telemetry AND the evidence file, then uploads both
+        to the Flask server.
 
         FIX ①: payload is now ChaCha20-Poly1305 encrypted and sent as
                 `encrypted_payload` (base64-encoded) — matching the server's
                 POST /api/alerts handler.
         FIX ②: reads `saved_files[0]` from the server JSON response instead of
                 the nonexistent `filename` key.
+        FIX ⑦: evidence file bytes are now encrypted with ChaCha20-Poly1305
+                before upload.  SHA-256 hash of the ORIGINAL plaintext file is
+                sent alongside so the server can verify integrity after
+                decryption.
 
         Returns (True, server_filename) on success, (False, None) on failure.
         """
@@ -180,8 +238,8 @@ class SIM7600:
                 'battery_percentage':  alert_object.battery_percentage,
             }
 
-            # FIX ①: encrypt before sending
-            from crypto_utils import chacha_encrypt_text
+            # FIX ①: encrypt telemetry payload before sending
+            from crypto_utils import chacha_encrypt_text, chacha_encrypt_bytes
             payload_json  = json.dumps(payload_dict)
             encrypted     = chacha_encrypt_text(payload_json)
             encrypted_b64 = base64.b64encode(encrypted).decode()
@@ -193,14 +251,30 @@ class SIM7600:
                 payload_dict['battery_percentage'],
             )
 
+            # FIX ⑦: encrypt evidence file bytes + compute hash of original
             with open(file_path, 'rb') as f:
-                files = {'file': (os.path.basename(file_path), f)}
-                r = requests.post(
-                    server_url,
-                    files=files,
-                    data={'encrypted_payload': encrypted_b64},
-                    timeout=30,
-                )
+                original_bytes = f.read()
+
+            original_hash       = hashlib.sha256(original_bytes).hexdigest()
+            encrypted_file_data = chacha_encrypt_bytes(original_bytes)
+
+            logger.info(
+                "[SIM7600] Evidence file: %s (%d bytes → %d encrypted) sha256=%s...",
+                os.path.basename(file_path),
+                len(original_bytes),
+                len(encrypted_file_data),
+                original_hash[:16],
+            )
+
+            files = {
+                'file': (os.path.basename(file_path), io.BytesIO(encrypted_file_data)),
+            }
+            data = {
+                'encrypted_payload': encrypted_b64,
+                'file_sha256':       original_hash,    # hash of ORIGINAL plaintext
+                'file_encrypted':    'true',           # signal to server to decrypt
+            }
+            r = requests.post(server_url, files=files, data=data, timeout=30)
 
             if r.status_code == 201:
                 logger.info("[SIM7600] Uploaded %s.", os.path.basename(file_path))

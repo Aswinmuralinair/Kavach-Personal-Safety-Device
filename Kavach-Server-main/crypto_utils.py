@@ -78,6 +78,20 @@ def chacha_decrypt_text(encrypted_data: bytes) -> str:
     return plaintext.decode()
 
 
+def chacha_decrypt_bytes(encrypted_data: bytes) -> bytes:
+    """Decrypt raw bytes encrypted with ChaCha20-Poly1305.
+
+    Used to decrypt evidence files (video clips, images) that the device
+    encrypted before uploading.  The device calls chacha_encrypt_bytes()
+    on the client side.
+    """
+    key    = load_chacha_key()
+    chacha = ChaCha20Poly1305(key)
+    nonce      = encrypted_data[:12]
+    ciphertext = encrypted_data[12:]
+    return chacha.decrypt(nonce, ciphertext, None)
+
+
 # ── Self-test (merged into a single block) ────────────────────────────────────
 
 if __name__ == "__main__":

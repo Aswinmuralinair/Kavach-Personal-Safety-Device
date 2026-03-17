@@ -20,4 +20,11 @@ spidev
 # Sensors
 adafruit-circuitpython-bno055
 adafruit-circuitpython-busdevice
-max30102
+# NOTE: max30102 has no PyPI package for Python 3.13+
+# Install manually if available:  pip install max30102
+# If not installed, the code auto-falls back to FakeHeartRate (won't crash)
+
+# Camera (Pi Camera Module via CSI)
+# NOTE: picamera2 is Pi-only (pre-installed on Raspberry Pi OS)
+# On non-Pi systems, the code auto-falls back to FakeCameraRecorder
+# pip install picamera2    (if not already on your Pi)

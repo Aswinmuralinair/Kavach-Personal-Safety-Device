@@ -214,16 +214,22 @@ def _run_update_loop(
 # 1. SOS SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
+def sos_sequence(sim: SIM7600, trigger_source: str = "button", camera=None) -> None:
     """
     Full SOS pipeline:
-      1. Calls police (config['police_number'])
-      2. SMS guardian: "SOS ALERT" + Google Maps link
-      3. Enters 60-second GPS + evidence upload loop until safe_sequence() fires
+      1. Start camera recording (if camera hardware available)
+      2. Calls police (config['police_number'])
+      3. SMS guardian: "SOS ALERT" + Google Maps link
+      4. Enters 60-second GPS + evidence upload loop until safe_sequence() fires
 
     `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
+    `camera` is the shared CameraManager from main.py (may be None).
     """
     _stop_alert_event.clear()
+
+    # Start evidence recording immediately
+    if camera:
+        camera.start_recording()
     logger.info("[SOS] ACTIVATED — trigger: %s", trigger_source)
 
     config        = _load_config()
@@ -294,16 +300,22 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
 # 2. MEDICAL ALERT SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def medical_sequence(sim: SIM7600) -> None:
+def medical_sequence(sim: SIM7600, camera=None) -> None:
     """
     Medical emergency pipeline:
-      1. Calls ambulance / medical contact (config['medical_number'])
-      2. SMS guardian AND medical contact: "MEDICAL EMERGENCY" + Google Maps link
-      3. Enters the same 60-second GPS + evidence upload loop, tagged "MEDICAL"
+      1. Start camera recording (if camera hardware available)
+      2. Calls ambulance / medical contact (config['medical_number'])
+      3. SMS guardian AND medical contact: "MEDICAL EMERGENCY" + Google Maps link
+      4. Enters the same 60-second GPS + evidence upload loop, tagged "MEDICAL"
 
     `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
+    `camera` is the shared CameraManager from main.py (may be None).
     """
     _stop_alert_event.clear()
+
+    # Start evidence recording immediately
+    if camera:
+        camera.start_recording()
     logger.info("[MEDICAL] ACTIVATED — double press.")
 
     config        = _load_config()
@@ -381,18 +393,24 @@ def medical_sequence(sim: SIM7600) -> None:
 # 3. SAFE SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def safe_sequence(sim: SIM7600, was_active_type: str = None) -> None:
+def safe_sequence(sim: SIM7600, was_active_type: str = None, camera=None) -> None:
     """
     'I am safe' pipeline:
+      - Stops camera recording (if running)
       - Stops the running SOS/MEDICAL loop immediately via _stop_alert_event
       - SMS guardian: "I AM SAFE" confirmation
       - SMS police cancellation if SOS was active (to prevent false response)
 
     `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
     `was_active_type` is passed from KavachStateMachine so we know what to cancel.
+    `camera` is the shared CameraManager from main.py (may be None).
     """
     logger.info("[SAFE] Long press detected — sending SAFE alert.")
     config = _load_config()
+
+    # ── Stop camera recording ─────────────────────────────────────────────────
+    if camera:
+        camera.stop_recording()
 
     # ── Cancel any running alert loop ─────────────────────────────────────────
     if was_active_type:
