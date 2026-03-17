@@ -380,11 +380,9 @@ class YAMNetDetector(BaseAudioDetector):
 
 class FakeAudioDetector(BaseAudioDetector):
     """
-    Cycles through simulated danger sounds every ~60 s for testing.
-    Call audio_manager.simulate_detection("screaming") to trigger immediately.
+    Simulated audio detector — only fires when manually triggered.
+    Press 'a' in the console, or call audio_manager.simulate_detection("screaming").
     """
-
-    AUTO_INTERVAL = 60
 
     _SOUNDS = [
         ("screaming",            "distress", 0.88),
@@ -404,12 +402,11 @@ class FakeAudioDetector(BaseAudioDetector):
         self._idx      = 0
 
     def initialise(self) -> None:
-        logger.warning("[FakeAudio] SIMULATION mode — danger sounds fire every ~%ds.",
-                       self.AUTO_INTERVAL)
+        logger.warning("[FakeAudio] SIMULATION mode — press 'a' in the console to trigger a danger sound.")
 
     def _loop(self) -> None:
         while self._running:
-            self._wake.wait(timeout=self.AUTO_INTERVAL)
+            self._wake.wait()
             if not self._running:
                 break
             self._wake.clear()
@@ -418,19 +415,12 @@ class FakeAudioDetector(BaseAudioDetector):
                 event = self._pending
                 self._pending = None
                 logger.info("[FakeAudio] Manual: '%s'", event.sound_class)
-            else:
-                cls, cat, conf = self._SOUNDS[self._idx % len(self._SOUNDS)]
-                conf = round(max(0.45, min(0.99, conf + random.uniform(-0.05, 0.05))), 2)
-                event = DetectionEvent(cls, cat, conf, cat in SOS_TRIGGER_CATEGORIES)
-                self._idx += 1
-                logger.info("[FakeAudio] AUTO DETECTION: '%s' (%s %.0f%%)",
-                            cls, cat, conf * 100)
 
-            if self._callback:
-                try:
-                    self._callback(event)
-                except Exception as exc:
-                    logger.error("[FakeAudio] Callback error: %s", exc)
+                if self._callback:
+                    try:
+                        self._callback(event)
+                    except Exception as exc:
+                        logger.error("[FakeAudio] Callback error: %s", exc)
 
     def start_listening(self, on_detection: Callable[[DetectionEvent], None]) -> None:
         self._callback = on_detection

@@ -45,6 +45,7 @@ import time
 import logging
 import json
 import os
+import sys
 
 from enum import Enum, auto
 from sqlalchemy import create_engine
@@ -408,6 +409,77 @@ def _on_lora_packet(packet: LoRaPacket) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Keyboard input — single keypress reader (no Enter needed)
+# ─────────────────────────────────────────────────────────────────────────────
+def _read_key() -> str:
+    """Read a single keypress without requiring Enter. Works on Windows and Linux/Pi."""
+    try:
+        import msvcrt
+        return msvcrt.getch().decode('utf-8', errors='ignore').lower()
+    except ImportError:
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch.lower()
+
+
+def _keyboard_handler(sensor_manager: SensorManager, audio_mgr: AudioManager) -> None:
+    """
+    Reads single keypresses and triggers the corresponding sensor event.
+    This lets you demo every trigger during a presentation without hardware.
+
+    Keys:
+        f  →  Fall detected (IMU spike → SOS)
+        h  →  High heart rate (BPM spike → SOS)
+        a  →  Audio danger sound (screaming → SOS)
+        s  →  SOS (simulates button single press)
+        d  →  Medical alert (simulates button double press)
+        l  →  Safe / cancel (simulates button long press)
+        q  →  Quit the program
+    """
+    logger.info("[Keyboard] Input handler ready — press a key to trigger.")
+    while True:
+        try:
+            key = _read_key()
+        except (EOFError, OSError):
+            break
+
+        if key == 'f':
+            logger.info("[Keyboard] 'f' pressed → triggering FALL event")
+            sensor_manager.imu.trigger_fall_now()
+
+        elif key == 'h':
+            logger.info("[Keyboard] 'h' pressed → triggering HEART RATE DISTRESS")
+            sensor_manager.heart_rate.trigger_distress_now()
+
+        elif key == 'a':
+            logger.info("[Keyboard] 'a' pressed → triggering AUDIO danger sound")
+            audio_mgr.simulate_detection("screaming")
+
+        elif key == 's':
+            logger.info("[Keyboard] 's' pressed → triggering SOS (button single press)")
+            kavach.trigger_alert("sos", "keyboard_sos")
+
+        elif key == 'd':
+            logger.info("[Keyboard] 'd' pressed → triggering MEDICAL (button double press)")
+            kavach.trigger_alert("medical", "keyboard_medical")
+
+        elif key == 'l':
+            logger.info("[Keyboard] 'l' pressed → triggering SAFE (cancel)")
+            kavach.trigger_safe()
+
+        elif key == 'q':
+            logger.info("[Keyboard] 'q' pressed → shutting down.")
+            os._exit(0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
@@ -473,7 +545,15 @@ if __name__ == '__main__':
     ).start()
     logger.info("[Boot] Sensor monitor threads started.")
 
-    # ── 10. Ready ─────────────────────────────────────────────────────────────
+    # ── 10. Keyboard input handler ─────────────────────────────────────────────
+    threading.Thread(
+        target=_keyboard_handler,
+        args=(sensor_manager, audio_manager),
+        name="KeyboardHandler",
+        daemon=True
+    ).start()
+
+    # ── 11. Ready ──────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info(" Kavach ARMED — %s", kavach.status_line())
     logger.info(" Triggers active:")
@@ -484,9 +564,15 @@ if __name__ == '__main__':
     logger.info("   Heart rate spike     → SOS")
     logger.info("   Audio danger sound   → SOS (YAMNet)")
     logger.info("   LoRa RX              → Mesh relay")
+    logger.info("")
+    logger.info(" Keyboard shortcuts (for demo / presentation):")
+    logger.info("   f → Fall detected      h → Heart rate spike")
+    logger.info("   a → Audio danger       s → SOS (button)")
+    logger.info("   d → Medical (button)   l → Safe / cancel")
+    logger.info("   q → Quit")
     logger.info("=" * 60)
 
-    # ── 11. Main thread sleeps — all work is in daemon threads ────────────────
+    # ── 12. Main thread sleeps — all work is in daemon threads ────────────────
     # signal.pause() is Unix-only — use a cross-platform sleep loop instead
     # so the device firmware runs identically on Windows (dev) and Pi (prod).
     try:

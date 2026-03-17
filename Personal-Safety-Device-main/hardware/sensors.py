@@ -177,27 +177,21 @@ class FakeIMU(BaseIMU):
     Behaviour:
         - Normal readings: gentle random accelerometer noise around 1g downward
           plus slow gyroscope drift.
-        - Simulated fall: every ~60 seconds a sudden high-g spike fires once,
-          causing is_fall_detected to return True for exactly one reading.
-          This lets you test the full SOS pipeline on a desk.
+        - Falls are ONLY triggered manually (keyboard 'f' key or calling
+          trigger_fall_now()), never automatically.
 
-    To manually trigger a fake fall during development:
-        sensor_manager.imu.trigger_fall_now()
+    To manually trigger a fake fall:
+        Press 'f' in the console, or call sensor_manager.imu.trigger_fall_now()
     """
-
-    # How often (seconds) a random fall event is injected automatically
-    AUTO_FALL_INTERVAL_SECONDS = 60
 
     def __init__(self):
         self._fall_pending = False
-        self._last_auto_fall = time.time()
         self._lock = threading.Lock()
 
     def initialise(self) -> None:
         logger.warning(
             "[FakeIMU] No BNO055 hardware detected — running in SIMULATION mode. "
-            "Fall events will be injected every ~%ds for testing.",
-            self.AUTO_FALL_INTERVAL_SECONDS
+            "Press 'f' in the console to trigger a fall event."
         )
 
     def trigger_fall_now(self) -> None:
@@ -208,12 +202,6 @@ class FakeIMU(BaseIMU):
 
     def read(self) -> IMUReading:
         with self._lock:
-            # Auto-inject a fall every AUTO_FALL_INTERVAL_SECONDS
-            now = time.time()
-            if now - self._last_auto_fall >= self.AUTO_FALL_INTERVAL_SECONDS:
-                self._fall_pending = True
-                self._last_auto_fall = now
-
             if self._fall_pending:
                 self._fall_pending = False
                 # Simulate a strong impact: ~4g spike on Y-axis (forward fall)
@@ -335,20 +323,18 @@ class FakeHeartRate(BaseHeartRate):
     Behaviour:
         - Normal readings: BPM oscillates 62–85 with realistic slow drift;
           SpO2 stays 96–99%.
-        - Simulated distress: every ~45 seconds, BPM spikes to 145–165 for
-          3 consecutive readings, triggering is_distress_detected = True.
-          SpO2 dips slightly to 93–95% during the spike.
+        - Distress events are ONLY triggered manually (keyboard 'h' key or
+          calling trigger_distress_now()), never automatically. BPM spikes to
+          145–165 for 3 consecutive readings when triggered.
 
     To manually trigger a fake distress event:
-        sensor_manager.heart_rate.trigger_distress_now()
+        Press 'h' in the console, or call sensor_manager.heart_rate.trigger_distress_now()
     """
 
-    AUTO_DISTRESS_INTERVAL_SECONDS = 45
     DISTRESS_DURATION_READINGS     = 3  # How many readings stay elevated
 
     def __init__(self):
         self._distress_remaining = 0
-        self._last_auto_distress = time.time()
         self._base_bpm = 72.0           # Drifts slowly like a real resting HR
         self._bpm_drift_direction = 1
         self._lock = threading.Lock()
@@ -356,8 +342,7 @@ class FakeHeartRate(BaseHeartRate):
     def initialise(self) -> None:
         logger.warning(
             "[FakeHeartRate] No MAX30102 hardware detected — running in SIMULATION mode. "
-            "Distress events will fire every ~%ds for testing.",
-            self.AUTO_DISTRESS_INTERVAL_SECONDS
+            "Press 'h' in the console to trigger a distress event."
         )
 
     def trigger_distress_now(self) -> None:
@@ -368,13 +353,6 @@ class FakeHeartRate(BaseHeartRate):
 
     def read(self) -> HeartRateReading:
         with self._lock:
-            now = time.time()
-
-            # Auto-inject distress event
-            if now - self._last_auto_distress >= self.AUTO_DISTRESS_INTERVAL_SECONDS:
-                self._distress_remaining = self.DISTRESS_DURATION_READINGS
-                self._last_auto_distress = now
-
             if self._distress_remaining > 0:
                 self._distress_remaining -= 1
                 bpm  = random.uniform(145.0, 165.0)
