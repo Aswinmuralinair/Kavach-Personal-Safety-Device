@@ -129,7 +129,7 @@ class SIM7600:
         logger.info("[SIM7600] Acquiring GPS fix...")
 
         coordinates = None
-        for _ in range(15):
+        for _ in range(5):
             success, response = self._send_command('AT+CGPSINFO', '+CGPSINFO:', 2)
             if success and ',,,,,,' not in response:
                 try:
@@ -153,7 +153,7 @@ class SIM7600:
             time.sleep(2)
 
         if not coordinates:
-            logger.warning("[SIM7600] Failed to get GPS fix after 15 attempts — trying cell tower fallback.")
+            logger.warning("[SIM7600] No GPS fix after 5 attempts — trying cell tower fallback.")
             coordinates = self._get_cell_tower_location()
             if coordinates:
                 logger.info("[SIM7600] Cell tower location acquired: %s", coordinates)

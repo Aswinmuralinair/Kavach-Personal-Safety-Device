@@ -1,6 +1,6 @@
 # Kavach — Personal Safety Device
 
-Kavach is a Raspberry Pi-based personal safety device that detects emergencies (falls, heart rate spikes, danger sounds, button presses) and automatically calls the police/ambulance, sends SMS with GPS location to your guardian, and uploads evidence to a server.
+Kavach is a Raspberry Pi-based personal safety device that detects emergencies (falls, heart rate spikes, danger sounds, button presses) and automatically calls the police/ambulance, sends SMS with GPS location to your guardian, and uploads encrypted evidence to a server.
 
 ## Architecture
 
@@ -11,20 +11,24 @@ The project has two parts that run on separate machines:
 | **Device** (sensors + alerts) | `Personal-Safety-Device-main/` | Raspberry Pi |
 | **Server** (stores alerts + evidence) | `Kavach-Server-main/` | Any PC (Windows/Linux) |
 
-The device encrypts all data with **ChaCha20-Poly1305** before sending it to the server. Evidence files are verified with **SHA-256** hashes to prove they haven't been tampered with.
+**All data is encrypted end-to-end:**
+- Telemetry (GPS, battery, alert type) → ChaCha20-Poly1305 encrypted
+- Evidence files (video clips, images) → ChaCha20-Poly1305 encrypted
+- File integrity → SHA-256 hashes verified server-side after decryption
 
 ---
 
 ## How the Device Works
 
-When you run `python main.py` on the Pi, it starts 6 subsystems simultaneously:
+When you run `python main.py` on the Pi, it starts 7 subsystems simultaneously:
 
 1. **Physical Button** (GPIO 23) — polled 50 times/second for press patterns
 2. **IMU** (BNO055 via I2C) — checks for falls 10 times/second
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
-5. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
-6. **Keyboard** — `f`, `h`, `a` keys to simulate sensors without hardware (for demos)
+5. **Pi Camera** (CSI interface via picamera2) — records 30-second H264 evidence clips during alerts
+6. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
+7. **Keyboard** — `f`, `h`, `a` keys to simulate sensors without hardware (for demos)
 
 If any sensor hardware is not connected, the code **auto-detects** and falls back to a simulator that does nothing until triggered by keyboard.
 
@@ -43,21 +47,33 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 ### SOS Sequence
 
 ```
-Step 1 → CALL POLICE (rings 15 seconds, hangs up)
-Step 2 → SMS to guardian: "SOS ALERT - Emergency triggered"
-Step 3 → Get GPS → SMS: "Location: https://maps.google.com/?q=12.97,77.59"
-Step 4 → LOOP every 60 seconds until cancelled:
-           ├── Send updated GPS location SMS
+Step 1 → START CAMERA RECORDING (30-second H264 clips to evidence/)
+Step 2 → CALL POLICE (rings 15 seconds, hangs up)
+Step 3 → SMS to guardian: "SOS ALERT - Emergency triggered"
+Step 4 → Get location (GPS first, cell tower fallback if GPS fails)
+         → SMS: "Location: https://maps.google.com/?q=12.97,77.59"
+Step 5 → LOOP every 60 seconds until cancelled:
+           ├── Get location (5 GPS attempts → cell tower fallback)
+           ├── Send updated GPS/tower location SMS
            ├── Send battery percentage SMS
-           ├── Upload new evidence files to server (encrypted)
+           ├── Encrypt + upload new evidence files to server
            └── SMS guardian the download link
-Step 5 → Long press button → SMS: "I AM SAFE, alert cancelled"
+Step 6 → Long press button → STOP CAMERA → SMS: "I AM SAFE, alert cancelled"
          → Device returns to IDLE
 ```
 
 MEDICAL alert is the same but calls the medical number and sends "MEDICAL EMERGENCY" messages.
 
 **Only one alert can run at a time.** If SOS is already active and another trigger fires, it is ignored.
+
+### Location Strategy
+
+The device uses a **GPS-first, cell-tower-fallback** approach:
+
+1. **GPS** (via SIM7600 AT+CGPSINFO) — tries 5 times (~20 seconds). Accuracy: 2-10 metres.
+2. **Cell Tower** (via SIM7600 AT+CLBS=4,1) — if GPS fails, falls back to cell tower triangulation. Accuracy: 100-2000 metres.
+
+This repeats every 60-second cycle during an active alert — so if GPS becomes available later (e.g. user moves outdoors), it automatically switches back to GPS.
 
 ---
 
@@ -67,18 +83,20 @@ The server is a Flask web app with these endpoints:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `POST` | `/api/alerts` | Receive encrypted telemetry + evidence from device |
+| `POST` | `/api/alerts` | Receive encrypted telemetry + encrypted evidence from device |
 | `GET` | `/api/alerts` | List all alerts (for a dashboard) |
 | `GET` | `/api/alerts/<id>` | Single alert detail with file integrity verification |
 | `GET` | `/api/health` | Server + database health check |
-| `GET` | `/uploads/<file>` | Serve evidence files (guardian clicks SMS link) |
+| `GET` | `/uploads/<file>` | Serve decrypted evidence files (guardian clicks SMS link) |
 
 When the device sends data:
-1. Server receives the encrypted payload
+1. Server receives the encrypted telemetry payload
 2. Decrypts it using the shared ChaCha20 key
-3. Saves evidence files to `uploads/`
-4. Verifies SHA-256 hashes match what the device sent
-5. Stores alert metadata in SQLite database (`kavach.db`)
+3. Receives encrypted evidence files
+4. Decrypts evidence files using the shared ChaCha20 key
+5. Verifies SHA-256 hashes match what the device sent (on the decrypted file)
+6. Saves decrypted evidence files to `uploads/`
+7. Stores alert metadata in SQLite database (`kavach.db`)
 
 ---
 
@@ -109,7 +127,7 @@ Both must be identical — if they don't match, decryption will fail.
 
 ### 2. Install Dependencies
 
-**On your Windows/Linux PC (server):**
+**On your Windows PC (server):**
 ```bash
 cd Kavach-Server-main
 pip install -r Requirements.txt
@@ -118,25 +136,19 @@ pip install -r Requirements.txt
 **On the Raspberry Pi (device):**
 ```bash
 cd Personal-Safety-Device-main
-pip install -r requirements.txt
+pip install SQLAlchemy requests pyserial cryptography numpy sounddevice RPi.GPIO smbus2 spidev adafruit-circuitpython-bno055 adafruit-circuitpython-busdevice tensorflow
 ```
 
-Then install the TFLite model runner separately (depends on your Python version):
-```bash
-# Python 3.9–3.12:
-pip install tflite-runtime
+> **Note:** `picamera2` is pre-installed on Raspberry Pi OS. If missing: `sudo apt install python3-picamera2`
 
-# Python 3.13+ (tflite-runtime not available):
-pip install tensorflow
+### 3. Find Your Windows PC's IP Address
+
+On the server machine, open Command Prompt and run:
+```
+ipconfig
 ```
 
-### 3. Find Your Server PC's IP Address
-
-On the server machine:
-- **Windows:** Open Command Prompt → run `ipconfig` → look for IPv4 Address (e.g. `192.168.1.50`)
-- **Linux:** Run `ip addr` or `hostname -I`
-
-Both machines must be on the same network.
+Look for your Wi-Fi or Ethernet adapter's **IPv4 Address** (e.g. `192.168.1.50`). Both machines must be on the same network.
 
 ### 4. Edit config.json (on the Pi)
 
@@ -172,22 +184,26 @@ python setup_audio.py
 
 This downloads `yamnet.tflite` and `yamnet_class_map.csv` into `models/`.
 
-### 6. Create the Evidence Folder (on the Pi)
+### 6. Connect the Pi Camera
 
+Plug the Pi Camera Module into the CSI port on the Raspberry Pi. Verify it works:
 ```bash
-mkdir -p Personal-Safety-Device-main/evidence
+libcamera-hello --timeout 5000
 ```
+
+If you see a 5-second preview window, the camera is working. If not connected, the code falls back to `FakeCameraRecorder` (no crash, just no video evidence).
 
 ### 7. Wire the Hardware
 
 ```
-Physical Button  → GPIO 23 (BCM) + GND
-SIM7600 module   → USB (/dev/ttyUSB2)
-BNO055 (IMU)     → I2C (SDA/SCL)
-MAX30102 (Heart) → I2C (SDA/SCL)
-INA219 (Battery) → I2C (SDA/SCL)
-SX1278 (LoRa)    → SPI + GPIO pins
-Microphone       → USB or 3.5mm (via sounddevice)
+Physical Button   → GPIO 23 (BCM) + GND
+Pi Camera Module  → CSI port (ribbon cable)
+SIM7600 module    → USB (/dev/ttyUSB2)
+BNO055 (IMU)      → I2C (SDA/SCL)
+MAX30102 (Heart)  → I2C (SDA/SCL)
+INA219 (Battery)  → I2C (SDA/SCL)
+SX1278 (LoRa)     → SPI + GPIO pins
+Microphone        → USB or 3.5mm (via sounddevice)
 ```
 
 Any sensor not connected will be automatically replaced by a simulator — the device will not crash.
@@ -196,7 +212,7 @@ Any sensor not connected will be automatically replaced by a simulator — the d
 
 ## Running the Project
 
-### Start the Server (on your PC)
+### Start the Server FIRST (on Windows PC)
 
 ```bash
 cd Kavach-Server-main
@@ -224,6 +240,15 @@ python main.py
 Expected output:
 ```
 Kavach ARMED — State=IDLE ActiveAlert=none
+Triggers active:
+  Button single press  → SOS
+  Button double press  → MEDICAL ALERT
+  Button long press 5s → SAFE (cancel + notify)
+  IMU fall detected    → SOS
+  Heart rate spike     → SOS
+  Audio danger sound   → SOS (YAMNet)
+  Camera               → Evidence recording during alerts
+  LoRa RX              → Mesh relay
 
 Keyboard shortcuts (sensors without hardware):
   f → Fall detected      h → Heart rate spike
@@ -237,18 +262,24 @@ Button functions (SOS / Medical / Safe) → physical GPIO button only
 
 | Step | Action | What Happens |
 |------|--------|-------------|
-| 1 | Start server on PC | Show health endpoint in browser |
+| 1 | Start server on Windows PC | Show health endpoint in browser |
 | 2 | Start device on Pi | Show boot logs, all subsystems initializing |
-| 3 | **Single press** the physical button | SOS: call police + SMS + GPS loop starts |
-| 4 | **Long press** the button (5s) | "I AM SAFE" SMS sent, alert cancelled |
-| 5 | Press `f` on keyboard | Fall detection triggers SOS |
-| 6 | Press `h` on keyboard | Heart rate spike triggers SOS |
-| 7 | Press `a` on keyboard | Audio danger (screaming) triggers SOS |
-| 8 | **Double tap** the button quickly | MEDICAL alert: calls medical number |
-| 9 | Open `http://<server-ip>:8080/api/alerts` | Show all alerts stored in database |
-| 10 | Open `http://<server-ip>:8080/api/alerts/1` | Show SHA-256 hash verification |
+| 3 | **Single press** the physical button | SOS: camera starts, call police + SMS + GPS loop |
+| 4 | Wait 60 seconds | Show evidence upload + GPS update cycle in logs |
+| 5 | **Long press** the button (5s) | Camera stops, "I AM SAFE" SMS, alert cancelled |
+| 6 | Press `f` on keyboard | Fall detection triggers SOS (camera + call + SMS) |
+| 7 | **Long press** to cancel | |
+| 8 | Press `h` on keyboard | Heart rate spike triggers SOS |
+| 9 | **Long press** to cancel | |
+| 10 | Press `a` on keyboard | Audio danger (screaming) triggers SOS |
+| 11 | **Long press** to cancel | |
+| 12 | **Double tap** the button quickly | MEDICAL alert: calls medical number |
+| 13 | **Long press** to cancel | |
+| 14 | Open `http://<server-ip>:8080/api/alerts` | Show all alerts stored in database |
+| 15 | Open `http://<server-ip>:8080/api/alerts/1` | Show SHA-256 hash verification of evidence |
+| 16 | Open `http://<server-ip>:8080/uploads/<filename>` | Show actual evidence file (decrypted video/image) |
 
-Remember to cancel each alert with a **long press** before triggering the next one — only one alert can run at a time.
+**Remember:** Cancel each alert with a **long press** before triggering the next one — only one alert can run at a time.
 
 ---
 
@@ -260,29 +291,30 @@ Kavach/
 │   ├── main.py                     ← Entry point, state machine, keyboard handler
 │   ├── alerts.py                   ← SOS, Medical, Safe sequences
 │   ├── database.py                 ← SQLAlchemy models (Alert table)
-│   ├── crypto_utils.py             ← ChaCha20-Poly1305 encryption
+│   ├── crypto_utils.py             ← ChaCha20-Poly1305 encryption (text + file bytes)
 │   ├── config.json                 ← Phone numbers, server URL, device settings
 │   ├── requirements.txt            ← Python dependencies
 │   ├── setup_audio.py              ← Downloads YAMNet model files
 │   ├── hardware/
-│   │   ├── comms.py                ← SIM7600: calls, SMS, GPS, HTTP upload
+│   │   ├── comms.py                ← SIM7600: calls, SMS, GPS, cell tower, upload
 │   │   ├── sensors.py              ← BNO055 (IMU/fall) + MAX30102 (heart rate)
 │   │   ├── audio.py                ← YAMNet microphone listener
 │   │   ├── button.py               ← GPIO button with single/double/long press
+│   │   ├── camera.py               ← Pi Camera: 30-sec H264 clip recording
 │   │   ├── lora.py                 ← SX1278 LoRa mesh radio
 │   │   └── power.py                ← INA219 battery voltage monitor
 │   ├── models/                     ← YAMNet TFLite model (after setup_audio.py)
-│   ├── evidence/                   ← Evidence files to upload (photos, audio)
+│   ├── evidence/                   ← Evidence files: video clips, photos
 │   └── keys/
 │       └── chacha.key              ← Shared encryption key
 │
-├── Kavach-Server-main/             ← Runs on server PC
-│   ├── app.py                      ← Flask API (receive, store, serve alerts)
+├── Kavach-Server-main/             ← Runs on server PC (Windows)
+│   ├── app.py                      ← Flask API (receive, decrypt, store, serve)
 │   ├── database.py                 ← SQLAlchemy models (Alert table)
-│   ├── crypto_utils.py             ← ChaCha20-Poly1305 decryption
-│   ├── utils.py                    ← File saving + SHA-256 hashing
+│   ├── crypto_utils.py             ← ChaCha20-Poly1305 decryption (text + file bytes)
+│   ├── utils.py                    ← File saving, decryption, SHA-256 hashing
 │   ├── Requirements.txt            ← Python dependencies
-│   ├── uploads/                    ← Stored evidence files
+│   ├── uploads/                    ← Decrypted evidence files
 │   └── keys/
 │       └── chacha.key              ← Same shared encryption key
 │
@@ -293,7 +325,9 @@ Kavach/
 
 ## Security Features
 
-- **End-to-end encryption** — All data encrypted with ChaCha20-Poly1305 before transmission
-- **Evidence integrity** — SHA-256 hashes verify files weren't tampered with in transit
-- **Live re-verification** — Server re-computes hashes on demand when viewing an alert
-- **No plaintext** — GPS coordinates, alert type, battery status are all encrypted in the payload
+- **End-to-end encryption** — All telemetry AND evidence files encrypted with ChaCha20-Poly1305
+- **Evidence file encryption** — Video clips and images are encrypted before leaving the Pi
+- **Evidence integrity** — SHA-256 hashes of original files sent alongside; server verifies after decryption
+- **Live re-verification** — Server re-computes hashes on demand when viewing an alert detail
+- **No plaintext in transit** — GPS coordinates, alert type, battery status, AND evidence files are all encrypted
+- **Cell tower fallback** — Even without GPS, approximate location is obtained via cell tower triangulation
