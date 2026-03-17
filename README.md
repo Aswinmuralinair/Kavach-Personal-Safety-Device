@@ -19,7 +19,7 @@ The device encrypts all data with **ChaCha20-Poly1305** before sending it to the
 
 When you run `python main.py` on the Pi, it starts 6 subsystems simultaneously:
 
-1. **Physical Button** (GPIO 17) — polled 50 times/second for press patterns
+1. **Physical Button** (GPIO 23) — polled 50 times/second for press patterns
 2. **IMU** (BNO055 via I2C) — checks for falls 10 times/second
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
@@ -32,9 +32,9 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 
 | Trigger | How | Result |
 |---------|-----|--------|
-| Button **single press** (hold < 5s, release) | GPIO pin 17 | SOS |
-| Button **double press** (two quick taps) | GPIO pin 17 | MEDICAL alert |
-| Button **long press** (hold 5+ seconds) | GPIO pin 17 | SAFE — cancels active alert |
+| Button **single press** (hold < 5s, release) | GPIO pin 23 | SOS |
+| Button **double press** (two quick taps) | GPIO pin 23 | MEDICAL alert |
+| Button **long press** (hold 5+ seconds) | GPIO pin 23 | SAFE — cancels active alert |
 | Fall detected | IMU sensor or press `f` | SOS |
 | Heart rate >= 140 BPM | Heart sensor or press `h` | SOS |
 | Danger sound (screaming, gunshot, etc.) | Microphone or press `a` | SOS |
@@ -121,6 +121,15 @@ cd Personal-Safety-Device-main
 pip install -r requirements.txt
 ```
 
+Then install the TFLite model runner separately (depends on your Python version):
+```bash
+# Python 3.9–3.12:
+pip install tflite-runtime
+
+# Python 3.13+ (tflite-runtime not available):
+pip install tensorflow
+```
+
 ### 3. Find Your Server PC's IP Address
 
 On the server machine:
@@ -138,7 +147,7 @@ Open `Personal-Safety-Device-main/config.json`:
   "device_id": "KAVACH-001",
   "serial_port": "/dev/ttyUSB2",
   "baud_rate": 115200,
-  "sos_button_pin": 17,
+  "sos_button_pin": 23,
   "police_number": "100",
   "guardian_number": "+919876543210",
   "medical_number": "+919876543211",
@@ -172,7 +181,7 @@ mkdir -p Personal-Safety-Device-main/evidence
 ### 7. Wire the Hardware
 
 ```
-Physical Button  → GPIO 17 (BCM) + GND
+Physical Button  → GPIO 23 (BCM) + GND
 SIM7600 module   → USB (/dev/ttyUSB2)
 BNO055 (IMU)     → I2C (SDA/SCL)
 MAX30102 (Heart) → I2C (SDA/SCL)

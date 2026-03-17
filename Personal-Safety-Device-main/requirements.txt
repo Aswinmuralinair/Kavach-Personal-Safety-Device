@@ -7,7 +7,10 @@ cryptography>=41.0
 # Audio (YAMNet AI model)
 numpy>=1.21
 sounddevice>=0.4
-tflite-runtime>=2.13
+# NOTE: tflite-runtime does NOT support Python 3.13+
+# Install ONE of these manually based on your Python version:
+#   Python 3.9-3.12:  pip install tflite-runtime
+#   Python 3.13+:     pip install tensorflow
 
 # Raspberry Pi hardware
 RPi.GPIO
