@@ -431,16 +431,14 @@ def _read_key() -> str:
 
 def _keyboard_handler(sensor_manager: SensorManager, audio_mgr: AudioManager) -> None:
     """
-    Reads single keypresses and triggers the corresponding sensor event.
-    This lets you demo every trigger during a presentation without hardware.
+    Reads single keypresses and triggers sensor events that have no physical
+    hardware attached.  Button functions (SOS, medical, safe) are handled
+    exclusively by the physical GPIO button.
 
     Keys:
         f  →  Fall detected (IMU spike → SOS)
         h  →  High heart rate (BPM spike → SOS)
         a  →  Audio danger sound (screaming → SOS)
-        s  →  SOS (simulates button single press)
-        d  →  Medical alert (simulates button double press)
-        l  →  Safe / cancel (simulates button long press)
         q  →  Quit the program
     """
     logger.info("[Keyboard] Input handler ready — press a key to trigger.")
@@ -461,18 +459,6 @@ def _keyboard_handler(sensor_manager: SensorManager, audio_mgr: AudioManager) ->
         elif key == 'a':
             logger.info("[Keyboard] 'a' pressed → triggering AUDIO danger sound")
             audio_mgr.simulate_detection("screaming")
-
-        elif key == 's':
-            logger.info("[Keyboard] 's' pressed → triggering SOS (button single press)")
-            kavach.trigger_alert("sos", "keyboard_sos")
-
-        elif key == 'd':
-            logger.info("[Keyboard] 'd' pressed → triggering MEDICAL (button double press)")
-            kavach.trigger_alert("medical", "keyboard_medical")
-
-        elif key == 'l':
-            logger.info("[Keyboard] 'l' pressed → triggering SAFE (cancel)")
-            kavach.trigger_safe()
 
         elif key == 'q':
             logger.info("[Keyboard] 'q' pressed → shutting down.")
@@ -565,11 +551,10 @@ if __name__ == '__main__':
     logger.info("   Audio danger sound   → SOS (YAMNet)")
     logger.info("   LoRa RX              → Mesh relay")
     logger.info("")
-    logger.info(" Keyboard shortcuts (for demo / presentation):")
+    logger.info(" Keyboard shortcuts (sensors without hardware):")
     logger.info("   f → Fall detected      h → Heart rate spike")
-    logger.info("   a → Audio danger       s → SOS (button)")
-    logger.info("   d → Medical (button)   l → Safe / cancel")
-    logger.info("   q → Quit")
+    logger.info("   a → Audio danger       q → Quit")
+    logger.info(" Button functions (SOS / Medical / Safe) → physical GPIO button only")
     logger.info("=" * 60)
 
     # ── 12. Main thread sleeps — all work is in daemon threads ────────────────
