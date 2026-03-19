@@ -22,15 +22,6 @@ FIXES APPLIED:
       port on shutdown (called from main.py's finally block).
 
   ⑤ Replaced bare print() calls with proper logging.
-
-  ⑥ Cell tower location fallback — when GPS fix fails, uses Unwired Labs
-      Cloud LBS API (AT+CPSI? → parse tower IDs → API lookup) to get
-      approximate location from cell towers (100-2000m accuracy).
-
-  ⑦ Evidence file encryption — upload_alert() now encrypts the evidence file
-      bytes with ChaCha20-Poly1305 before uploading + sends SHA-256 hash of
-      the original plaintext file so the server can verify integrity after
-      decryption.
 """
 
 import serial
@@ -38,18 +29,16 @@ import time
 import json
 import base64
 import os
-import io
-import re
-import hashlib
 import logging
+import threading
 import requests
 
 logger = logging.getLogger(__name__)
 
 
 class SIM7600:
-    def __init__(self, port, baud=115200, timeout=1, api_token=None):
-        self.api_token = api_token   # Unwired Labs API token for cell tower location
+    def __init__(self, port, baud=115200, timeout=1):
+        self._lock = threading.Lock()
         try:
             self.ser = serial.Serial(port, baud, timeout=timeout)
             logger.info("[SIM7600] Initialized on %s @ %d baud.", port, baud)
@@ -69,6 +58,7 @@ class SIM7600:
 
     # ── Internal AT command sender ─────────────────────────────────────────────
     def _send_command(self, command, expected_response, timeout):
+        """Send AT command. Caller must hold self._lock if thread-safety needed."""
         if not self.ser:
             return False, "Not connected"
         self.ser.write((command + '\r\n').encode())
@@ -86,33 +76,36 @@ class SIM7600:
     def send_sms(self, number, text):
         if not self.ser:
             return False
-        try:
-            self._send_command('AT+CMGF=1', 'OK', 1)
-            cmd = f'AT+CMGS="{number}"'
-            success, _ = self._send_command(cmd, '>', 2)
-            if success:
-                self.ser.write(text.encode() + b"\x1A")
-                sms_success, _ = self._send_command('', 'OK', 20)
-                if sms_success:
-                    logger.info("[SIM7600] SMS sent to %s.", number)
-                    return True
-            logger.warning("[SIM7600] Failed to send SMS to %s.", number)
-            return False
-        except Exception as e:
-            logger.error("[SIM7600] Error during send_sms: %s", e)
-            return False
+        with self._lock:
+            try:
+                self._send_command('AT+CMGF=1', 'OK', 1)
+                cmd = f'AT+CMGS="{number}"'
+                success, _ = self._send_command(cmd, '>', 2)
+                if success:
+                    self.ser.write(text.encode() + b"\x1A")
+                    sms_success, _ = self._send_command('', 'OK', 20)
+                    if sms_success:
+                        logger.info("[SIM7600] SMS sent to %s.", number)
+                        return True
+                logger.warning("[SIM7600] Failed to send SMS to %s.", number)
+                return False
+            except Exception as e:
+                logger.error("[SIM7600] Error during send_sms: %s", e)
+                return False
 
     # ── Voice call ────────────────────────────────────────────────────────────
     def place_call(self, number):
         if not self.ser:
             return False
-        success, _ = self._send_command(f'ATD{number};', 'OK', 10)
-        return success
+        with self._lock:
+            success, _ = self._send_command(f'ATD{number};', 'OK', 10)
+            return success
 
     def hang_up_call(self):
         if not self.ser:
             return False
-        return self._send_command('AT+CHUP', 'OK', 5)[0]
+        with self._lock:
+            return self._send_command('AT+CHUP', 'OK', 5)[0]
 
     # ── GPS ───────────────────────────────────────────────────────────────────
     def get_gps_location(self):
@@ -128,143 +121,51 @@ class SIM7600:
         if not self.ser:
             return None
 
-        self._send_command('AT+CGPS=1,1', 'OK', 1)
-        logger.info("[SIM7600] Acquiring GPS fix...")
+        with self._lock:
+            self._send_command('AT+CGPS=1,1', 'OK', 1)
+            logger.info("[SIM7600] Acquiring GPS fix...")
 
-        coordinates = None
-        for _ in range(5):
-            success, response = self._send_command('AT+CGPSINFO', '+CGPSINFO:', 2)
-            if success and ',,,,,,' not in response:
-                try:
-                    parts = response.split(': ')[1].split(',')
-                    lat_raw, lat_dir, lon_raw, lon_dir = (
-                        parts[0], parts[1], parts[2], parts[3]
-                    )
-                    lat_deg, lat_min = divmod(float(lat_raw), 100)
-                    lon_deg, lon_min = divmod(float(lon_raw), 100)
-                    latitude  = lat_deg + (lat_min / 60)
-                    longitude = lon_deg + (lon_min / 60)
-                    if lat_dir == 'S':
-                        latitude  = -latitude
-                    if lon_dir == 'W':
-                        longitude = -longitude
-                    coordinates = f"{latitude},{longitude}"
-                    logger.info("[SIM7600] GPS fix: %s", coordinates)
-                    break
-                except (ValueError, IndexError):
-                    continue
-            time.sleep(2)
+            coordinates = None
+            for _ in range(15):
+                success, response = self._send_command('AT+CGPSINFO', '+CGPSINFO:', 2)
+                if success and ',,,,,,' not in response:
+                    try:
+                        parts = response.split(': ')[1].split(',')
+                        lat_raw, lat_dir, lon_raw, lon_dir = (
+                            parts[0], parts[1], parts[2], parts[3]
+                        )
+                        lat_deg, lat_min = divmod(float(lat_raw), 100)
+                        lon_deg, lon_min = divmod(float(lon_raw), 100)
+                        latitude  = lat_deg + (lat_min / 60)
+                        longitude = lon_deg + (lon_min / 60)
+                        if lat_dir == 'S':
+                            latitude  = -latitude
+                        if lon_dir == 'W':
+                            longitude = -longitude
+                        coordinates = f"{latitude},{longitude}"
+                        logger.info("[SIM7600] GPS fix: %s", coordinates)
+                        break
+                    except (ValueError, IndexError):
+                        continue
+                time.sleep(2)
 
-        if not coordinates:
-            logger.warning("[SIM7600] No GPS fix after 5 attempts — trying cell tower fallback.")
-            coordinates = self._get_cell_tower_location()
-            if coordinates:
-                logger.info("[SIM7600] Cell tower location acquired: %s", coordinates)
-            else:
-                logger.warning("[SIM7600] Cell tower fallback also failed — no location available.")
+            if not coordinates:
+                logger.warning("[SIM7600] Failed to get GPS fix after 15 attempts.")
 
-        self._send_command('AT+CGPS=0', 'OK', 1)
+            self._send_command('AT+CGPS=0', 'OK', 1)
         return coordinates
-
-    # ── Cell tower location fallback (Unwired Labs Cloud LBS API) ───────────
-    def _get_cell_tower_location(self):
-        """
-        Use Unwired Labs Cloud LBS API for cell tower location.
-        Returns "lat,lon" string or None on failure.
-        Accuracy: typically 100-2000 metres (network dependent).
-
-        FIX ⑥: Called automatically when GPS fix fails after 5 attempts.
-
-        How it works:
-          1. Send AT+CPSI? to SIM7600 → get raw cell tower IDs (MCC, MNC, LAC, CID)
-          2. POST those IDs to Unwired Labs API → API returns lat/lon
-          3. Requires api_token in config.json (free tier: 100 requests/day)
-        """
-        if not self.ser:
-            return None
-
-        if not self.api_token:
-            logger.warning("[SIM7600] No Unwired Labs API token — cell tower fallback disabled.")
-            return None
-
-        try:
-            # Step 1: Get cell tower info from modem
-            success, response = self._send_command('AT+CPSI?', '+CPSI:', 3)
-            if not success or 'Online' not in response:
-                logger.warning("[SIM7600] Modem not online — cannot get tower info.")
-                return None
-
-            # Step 2: Parse MCC, MNC, LAC, CID from AT+CPSI? response
-            # Example: +CPSI: LTE,Online,404-95,0x0D5D,233413644,...
-            match = re.search(r'(\d{3})-(\d{2,3}),0x([0-9A-Fa-f]+),(\d+)', response)
-            if not match:
-                logger.warning("[SIM7600] Could not parse cell tower IDs from AT+CPSI? response.")
-                return None
-
-            mcc = int(match.group(1))
-            mnc = int(match.group(2))
-            lac = int(match.group(3), 16)   # hex → int
-            cid = int(match.group(4))
-
-            logger.info(
-                "[SIM7600] Cell tower identified: MCC=%d MNC=%d LAC=%d CID=%d",
-                mcc, mnc, lac, cid
-            )
-
-            # Step 3: Send tower IDs to Unwired Labs API
-            url = "https://us1.unwiredlabs.com/v2/process.php"
-            payload = {
-                "token": self.api_token,
-                "radio": "lte",
-                "mcc": mcc,
-                "mnc": mnc,
-                "cells": [{"lac": lac, "cid": cid}],
-                "address": 1,
-            }
-
-            r = requests.post(url, json=payload, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                if data.get('status') == 'ok':
-                    lat = data.get('lat')
-                    lon = data.get('lon')
-                    accuracy = data.get('accuracy', 'unknown')
-                    address = data.get('address', '')
-                    logger.info(
-                        "[SIM7600] Cell tower fix: lat=%.6f lon=%.6f accuracy=%sm (TOWER)",
-                        lat, lon, accuracy
-                    )
-                    if address:
-                        logger.info("[SIM7600] Tower address: %s", address)
-                    return f"{lat},{lon}"
-                else:
-                    logger.warning(
-                        "[SIM7600] Unwired Labs API error: %s",
-                        data.get('message', 'unknown')
-                    )
-            else:
-                logger.warning("[SIM7600] Unwired Labs API returned HTTP %d.", r.status_code)
-
-            return None
-        except Exception as e:
-            logger.error("[SIM7600] Cell tower location error: %s", e)
-            return None
 
     # ── Evidence upload ───────────────────────────────────────────────────────
     def upload_alert(self, server_url, alert_object, file_path):
         """
-        Encrypts the alert telemetry AND the evidence file, then uploads both
-        to the Flask server.
+        Encrypts the alert telemetry and uploads it together with an evidence
+        file to the Flask server.
 
         FIX ①: payload is now ChaCha20-Poly1305 encrypted and sent as
                 `encrypted_payload` (base64-encoded) — matching the server's
                 POST /api/alerts handler.
         FIX ②: reads `saved_files[0]` from the server JSON response instead of
                 the nonexistent `filename` key.
-        FIX ⑦: evidence file bytes are now encrypted with ChaCha20-Poly1305
-                before upload.  SHA-256 hash of the ORIGINAL plaintext file is
-                sent alongside so the server can verify integrity after
-                decryption.
 
         Returns (True, server_filename) on success, (False, None) on failure.
         """
@@ -286,8 +187,8 @@ class SIM7600:
                 'battery_percentage':  alert_object.battery_percentage,
             }
 
-            # FIX ①: encrypt telemetry payload before sending
-            from crypto_utils import chacha_encrypt_text, chacha_encrypt_bytes
+            # FIX ①: encrypt before sending
+            from crypto_utils import chacha_encrypt_text
             payload_json  = json.dumps(payload_dict)
             encrypted     = chacha_encrypt_text(payload_json)
             encrypted_b64 = base64.b64encode(encrypted).decode()
@@ -299,30 +200,14 @@ class SIM7600:
                 payload_dict['battery_percentage'],
             )
 
-            # FIX ⑦: encrypt evidence file bytes + compute hash of original
             with open(file_path, 'rb') as f:
-                original_bytes = f.read()
-
-            original_hash       = hashlib.sha256(original_bytes).hexdigest()
-            encrypted_file_data = chacha_encrypt_bytes(original_bytes)
-
-            logger.info(
-                "[SIM7600] Evidence file: %s (%d bytes → %d encrypted) sha256=%s...",
-                os.path.basename(file_path),
-                len(original_bytes),
-                len(encrypted_file_data),
-                original_hash[:16],
-            )
-
-            files = {
-                'file': (os.path.basename(file_path), io.BytesIO(encrypted_file_data)),
-            }
-            data = {
-                'encrypted_payload': encrypted_b64,
-                'file_sha256':       original_hash,    # hash of ORIGINAL plaintext
-                'file_encrypted':    'true',           # signal to server to decrypt
-            }
-            r = requests.post(server_url, files=files, data=data, timeout=30)
+                files = {'file': (os.path.basename(file_path), f)}
+                r = requests.post(
+                    server_url,
+                    files=files,
+                    data={'encrypted_payload': encrypted_b64},
+                    timeout=30,
+                )
 
             if r.status_code == 201:
                 logger.info("[SIM7600] Uploaded %s.", os.path.basename(file_path))
@@ -352,7 +237,7 @@ class SIM7600:
     @staticmethod
     def has_internet():
         try:
-            requests.head('https://www.google.com', timeout=5)
+            requests.head('https://www.google.com', timeout=3)
             return True
         except Exception:
             return False

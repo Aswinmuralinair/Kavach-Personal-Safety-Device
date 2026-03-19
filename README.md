@@ -89,7 +89,9 @@ The server is a Flask web app with these endpoints:
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| `GET` | `/` | Admin web dashboard (map + stats + alerts table) |
+| `GET` | `/` | Admin web dashboard (login required) |
+| `GET` | `/login` | Admin login page |
+| `GET` | `/logout` | Admin logout |
 | `POST` | `/api/alerts` | Receive encrypted telemetry + encrypted evidence from device |
 | `GET` | `/api/alerts` | List all alerts (for dashboard) |
 | `GET` | `/api/alerts/<id>` | Single alert detail with file integrity verification |
@@ -164,7 +166,7 @@ The device (Pi) and server (laptop) do NOT need to be on the same Wi-Fi. We use 
 3. Run: `ngrok config add-authtoken YOUR_TOKEN_HERE`
 4. Go to **Domains** in the ngrok dashboard → click **New Domain** → get your free permanent domain (e.g. `your-name.ngrok-free.dev`)
 
-**Every time you start the server, also start ngrok in a second terminal:**
+**ngrok starts automatically** when you run `.\start.bat` — no need for a second terminal. To run ngrok manually instead:
 ```bash
 ngrok http --domain your-name.ngrok-free.dev 8080
 ```
@@ -239,36 +241,23 @@ Any sensor not connected will be automatically replaced by a simulator — the d
 
 ## Running the Project
 
-### Start the Server FIRST (on Windows PC — two terminals)
+### Start the Server FIRST (on Windows PC — one command)
 
-**Terminal 1: Start Flask server**
 ```bash
 cd Kavach-Server-main
-python app.py
+.\start.bat
 ```
 
-**Terminal 2: Start ngrok tunnel**
-```bash
-ngrok http --domain your-name.ngrok-free.dev 8080
-```
+This single command will:
+1. Create a Python virtual environment (first time only)
+2. Install all dependencies from `Requirements.txt`
+3. Start the Flask server on port 8080
+4. Launch ngrok tunnel automatically
+5. Open the dashboard in your browser
 
-Expected server output:
-```
-Kavach Server v2.0 starting
-Database: kavach.db
-Upload dir: ...\uploads
-GET  /                  — admin dashboard
-POST /api/alerts        — receive telemetry
-GET  /api/alerts        — list all alerts
-GET  /api/alerts/<id>   — alert detail + hash check
-GET  /api/health        — server health
-GET  /uploads/<file>    — serve evidence
-POST /api/auth/login    — app auth token
-GET  /api/user/alerts   — user alerts (app)
-GET  /api/guardian/alerts — guardian alerts (app)
-```
+**Admin Login:** Username `admin`, Password `kavach2026`. Change via environment variables `KAVACH_ADMIN_USER` and `KAVACH_ADMIN_PASS`.
 
-Verify: open `https://your-name.ngrok-free.dev/` in your browser to see the admin dashboard, or `https://your-name.ngrok-free.dev/api/health` for a health check.
+Verify: open `https://your-name.ngrok-free.dev/` in your browser — you'll see the login page. After logging in, you'll see the admin dashboard with map, stats, alerts, and evidence files.
 
 ### Start the Device (on the Raspberry Pi — can be anywhere in the world)
 
@@ -303,7 +292,7 @@ Button functions (SOS / Medical / Safe) → physical GPIO button only
 
 | Step | Action | What Happens |
 |------|--------|-------------|
-| 1 | Start server + ngrok on Windows PC | Show health endpoint in browser |
+| 1 | Run `.\start.bat` on Windows PC | Server + ngrok + browser open automatically |
 | 2 | Start device on Pi (any network) | Show boot logs, all subsystems initializing |
 | 3 | **Single press** the physical button | SOS: camera starts, call police + SMS + GPS loop |
 | 4 | Wait 60 seconds | Show evidence upload + GPS update cycle in logs |
@@ -316,7 +305,7 @@ Button functions (SOS / Medical / Safe) → physical GPIO button only
 | 11 | **Long press** to cancel | |
 | 12 | **Double tap** the button quickly | MEDICAL alert: calls medical number |
 | 13 | **Long press** to cancel | |
-| 14 | Open `https://your-name.ngrok-free.dev/` | Show admin dashboard with map, stats, and alerts |
+| 14 | Open `https://your-name.ngrok-free.dev/` | Login with admin/kavach2026, show dashboard with map, stats, alerts, and evidence gallery |
 | 15 | Open `https://your-name.ngrok-free.dev/api/alerts/1` | Show SHA-256 hash verification of evidence |
 | 16 | Open `https://your-name.ngrok-free.dev/uploads/<filename>` | Show actual evidence file (decrypted video/audio) |
 
@@ -353,12 +342,14 @@ Kavach/
 │
 ├── Kavach-Server-main/             ← Runs on server PC (Windows)
 │   ├── app.py                      ← Flask API (receive, decrypt, store, serve, dashboard)
+│   ├── start.bat                   ← One-click launcher (venv + deps + server + ngrok + browser)
 │   ├── database.py                 ← SQLAlchemy models (Alert table)
 │   ├── crypto_utils.py             ← ChaCha20-Poly1305 decryption (text + file bytes)
 │   ├── utils.py                    ← File saving, decryption, SHA-256 hashing
 │   ├── Requirements.txt            ← Python dependencies
 │   ├── templates/
-│   │   └── dashboard.html          ← Admin web dashboard (Leaflet.js map + stats)
+│   │   ├── login.html              ← Admin login page
+│   │   └── dashboard.html          ← Admin web dashboard (map + stats + evidence)
 │   ├── uploads/                    ← Decrypted evidence files
 │   └── keys/
 │       └── chacha.key              ← Same shared encryption key
@@ -371,12 +362,16 @@ Kavach/
 ## New Features (v3.0)
 
 ### 1. Admin Web Dashboard
-Open `http://<server-ip>:8080/` in your browser to see:
+Open `https://your-name.ngrok-free.dev/` (or `http://localhost:8080/`) to see:
+- **Admin login** — username/password required to access the dashboard
+- **Light modern theme** — clean white design with color-coded stats
 - **Stats bar** — total alerts, SOS count, medical count, active devices, evidence files
-- **Live map** — Leaflet.js + OpenStreetMap with colored markers (red=SOS, purple=MEDICAL, cyan=other)
+- **Live map** — Leaflet.js + OpenStreetMap with colored markers (red=SOS, purple=MEDICAL, blue=other)
 - **Recent alerts table** — top 10 alerts with clickable GPS and evidence links
-- **Full alerts table** — all alerts with detailed info
+- **All alerts table** — full table with detailed info (tabbed view)
+- **Evidence gallery** — visual grid of uploaded evidence files with thumbnails, file type tags, and download links. Filterable by type (images, videos, audio)
 - **Auto-refresh** every 30 seconds
+- **Sign Out** button in header
 
 ### 2. App-ready API Endpoints
 REST API endpoints ready for a future mobile app:
@@ -435,6 +430,18 @@ During SOS and MEDICAL alerts:
 - **No plaintext in transit** — GPS coordinates, alert type, battery status, AND evidence files are all encrypted
 - **Cell tower fallback** — Even without GPS, approximate location is obtained via cell tower triangulation
 - **Persistent auth tokens** — Server SECRET_KEY saved to `.secret_key` file, survives restarts
+
+---
+
+## Changes (v3.2)
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | Admin login required for dashboard | Username/password authentication. Default: `admin`/`kavach2026`. Configurable via env vars |
+| 2 | Light theme dashboard | Redesigned with clean white/light-gray theme, modern cards, and better readability |
+| 3 | Evidence gallery | New tabbed "Evidence Files" view with thumbnails, file type tags, and filter by type |
+| 4 | One-click `start.bat` launcher | Creates venv, installs deps, starts Flask + ngrok + opens browser automatically |
+| 5 | Sign Out button | Header logout link to end admin session |
 
 ---
 

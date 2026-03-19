@@ -337,7 +337,7 @@ class YAMNetDetector(BaseAudioDetector):
         top_class, top_cat, top_conf = detections[0]
 
         for cls, cat, conf in detections:
-            logger.info("[YAMNet] %-30s  %-10s  %.1f%%", cls, cat, conf * 100)
+            logger.debug("[YAMNet] %-30s  %-10s  %.1f%%", cls, cat, conf * 100)
 
         now = time.monotonic()
         if (now - self._last_trigger) < COOLDOWN_SECONDS:

@@ -1,17 +1,17 @@
 """
-app.py — Kavach Server
+app.py - Kavach Server
 
 Enhanced Flask API with:
-  POST /api/alerts         — receive encrypted telemetry + evidence files
-  GET  /api/health         — server + database health check
-  GET  /api/alerts         — list all alerts (for future dashboard)
-  GET  /api/alerts/<id>    — single alert detail with hash verification status
-  GET  /uploads/<file>     — serve evidence files
+  POST /api/alerts         - receive encrypted telemetry + evidence files
+  GET  /api/health         - server + database health check
+  GET  /api/alerts         - list all alerts (for future dashboard)
+  GET  /api/alerts/<id>    - single alert detail with hash verification status
+  GET  /uploads/<file>     - serve evidence files
 
 FIXES APPLIED:
   ① datetime.UTC → datetime.timezone.utc
       datetime.UTC was only added in Python 3.11.
-      datetime.timezone.utc has existed since Python 3.2 — safe everywhere.
+      datetime.timezone.utc has existed since Python 3.2 - safe everywhere.
 
   ② Alert.query.get(id) → db.session.get(Alert, id)
       Query.get() was deprecated in SQLAlchemy 1.4 and REMOVED in 2.0.
@@ -21,8 +21,9 @@ FIXES APPLIED:
       ?limit=-1 previously bypassed the cap and dumped the entire table.
 """
 
-from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask import Flask, request, jsonify, send_from_directory, render_template, session, redirect, url_for
 from flask_cors import CORS
+from functools import wraps
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import os
 import sys
@@ -31,13 +32,16 @@ import base64
 import logging
 import datetime
 import uuid
+import webbrowser
+import threading
+import subprocess
 
 from database import DB, Alert
 from utils import save_file_safe, compute_sha256, decrypt_file_in_place
 from crypto_utils import chacha_decrypt_text
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logging — structured, goes to stdout (visible in server terminal)
+# Logging - structured, goes to stdout (visible in server terminal)
 # ─────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -62,9 +66,28 @@ DB.init_app(app)
 UPLOAD_DIR = os.path.join(os.getcwd(), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+CONFIG_DIR = os.path.join(os.getcwd(), 'device_configs')
+os.makedirs(CONFIG_DIR, exist_ok=True)
+
+
+def _load_device_config(device_id: str) -> dict:
+    """Load device config from JSON file."""
+    path = os.path.join(CONFIG_DIR, f'{device_id}.json')
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+def _save_device_config(device_id: str, config: dict):
+    """Save device config to JSON file."""
+    path = os.path.join(CONFIG_DIR, f'{device_id}.json')
+    with open(path, 'w') as f:
+        json.dump(config, f, indent=2)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # App-ready API auth (for future mobile app)
-# Uses itsdangerous (bundled with Flask) for signed tokens — no PyJWT needed.
+# Uses itsdangerous (bundled with Flask) for signed tokens - no PyJWT needed.
 #
 # FIX: SECRET_KEY is persisted to .secret_key file so auth tokens survive
 # server restarts.  Override via KAVACH_SECRET_KEY env var if desired.
@@ -79,24 +102,83 @@ def _load_or_create_secret_key() -> str:
     if os.path.exists(key_file):
         with open(key_file, 'r') as f:
             return f.read().strip()
-    # First run — generate and persist
+    # First run - generate and persist
     new_key = os.urandom(32).hex()
     with open(key_file, 'w') as f:
         f.write(new_key)
-    logger.info("[Auth] Generated new SECRET_KEY → saved to .secret_key")
+    logger.info("[Auth] Generated new SECRET_KEY -- saved to .secret_key")
     return new_key
 
 app.config['SECRET_KEY'] = _load_or_create_secret_key()
 _token_serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX ① — use datetime.timezone.utc everywhere instead of datetime.UTC
+# FIX ① - use datetime.timezone.utc everywhere instead of datetime.UTC
 # datetime.UTC was only added in Python 3.11; timezone.utc works on 3.2+
 # ─────────────────────────────────────────────────────────────────────────────
 _UTC = datetime.timezone.utc                                   # ← single alias
 
-# Boot time — used in /api/health uptime calculation
+# Boot time - used in /api/health uptime calculation
 _SERVER_START_TIME = datetime.datetime.now(_UTC)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Admin credentials (change these!)
+# ─────────────────────────────────────────────────────────────────────────────
+ADMIN_USERNAME = os.environ.get('KAVACH_ADMIN_USER', 'admin')
+ADMIN_PASSWORD = os.environ.get('KAVACH_ADMIN_PASS', 'kavach2026')
+
+# ─────────────────────────────────────────────────────────────────────────────
+# App user accounts (stored in app_users.json)
+# ─────────────────────────────────────────────────────────────────────────────
+from werkzeug.security import generate_password_hash, check_password_hash
+import re as _re
+
+APP_USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_users.json')
+
+# Regex for basic phone number validation
+_PHONE_RE = _re.compile(r'^\+?[\d\s\-()]{3,20}$')
+
+
+def _load_app_users() -> dict:
+    """Load registered app users from JSON file."""
+    if os.path.exists(APP_USERS_FILE):
+        try:
+            with open(APP_USERS_FILE, 'r') as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+    return {}
+
+
+def _save_app_users(users: dict):
+    """Save app users to JSON file."""
+    with open(APP_USERS_FILE, 'w') as f:
+        json.dump(users, f, indent=2)
+
+
+def _hash_password(password: str) -> str:
+    """Hash password with werkzeug (pbkdf2 with salt)."""
+    return generate_password_hash(password)
+
+
+def _check_password(stored_hash: str, password: str) -> bool:
+    """Verify password against stored hash. Supports legacy SHA-256 hashes."""
+    # Support legacy SHA-256 hashes (64 hex chars, no prefix)
+    if len(stored_hash) == 64 and not stored_hash.startswith('pbkdf2:'):
+        import hashlib
+        return stored_hash == hashlib.sha256(password.encode()).hexdigest()
+    return check_password_hash(stored_hash, password)
+
+
+def admin_required(f):
+    """Decorator: redirect to login if not authenticated."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('admin_logged_in'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,15 +189,38 @@ def _request_id() -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET / — Admin Dashboard
+# Admin Login / Logout
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session['admin_logged_in'] = True
+            return redirect(url_for('dashboard'))
+        error = 'Invalid username or password'
+    return render_template('login.html', error=error)
+
+
+@app.route('/logout')
+def logout():
+    session.pop('admin_logged_in', None)
+    return redirect(url_for('login'))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET / - Admin Dashboard (protected)
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/')
+@admin_required
 def dashboard():
     return render_template('dashboard.html')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# App-ready API — Auth + Role-based endpoints (for future mobile app)
+# App-ready API - Auth + Role-based endpoints (for future mobile app)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _create_token(device_id: str, role: str) -> str:
@@ -142,11 +247,62 @@ def _verify_token(req) -> tuple:
         raise ValueError('Invalid token.')
 
 
+@app.route('/api/auth/signup', methods=['POST'])
+def auth_signup():
+    """
+    Register a new app account.
+    Accepts: { "device_id": "KAVACH-001", "role": "user"|"guardian", "password": "..." }
+    Each device_id can have one user account and one guardian account.
+    """
+    try:
+        body = request.get_json()
+        if not body:
+            return jsonify({'status': 'error', 'message': 'JSON body required'}), 400
+
+        device_id = body.get('device_id', '').strip()
+        role      = body.get('role', '').strip()
+        password  = body.get('password', '')
+
+        if not device_id:
+            return jsonify({'status': 'error', 'message': 'Device ID is required'}), 400
+        if role not in ('user', 'guardian'):
+            return jsonify({'status': 'error', 'message': 'Role must be "user" or "guardian"'}), 400
+        if not password or len(password) < 4:
+            return jsonify({'status': 'error', 'message': 'Password must be at least 4 characters'}), 400
+
+        users = _load_app_users()
+        account_key = f"{device_id}_{role}"
+
+        if account_key in users:
+            return jsonify({'status': 'error', 'message': f'A {role} account already exists for {device_id}. Please login instead.'}), 409
+
+        users[account_key] = {
+            'device_id':    device_id,
+            'role':         role,
+            'password_hash': _hash_password(password),
+            'created_at':   datetime.datetime.now(_UTC).isoformat(),
+        }
+        _save_app_users(users)
+        logger.info("[Auth] New %s account registered for device %s", role, device_id)
+
+        # Auto-login after signup
+        token = _create_token(device_id, role)
+        return jsonify({
+            'status':    'ok',
+            'message':   'Account created successfully',
+            'token':     token,
+            'role':      role,
+            'device_id': device_id,
+        }), 201
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
 @app.route('/api/auth/login', methods=['POST'])
 def auth_login():
     """
-    Login endpoint for the future mobile app.
-    Accepts: { "device_id": "KAVACH-001", "role": "user"|"guardian" }
+    Login endpoint for the mobile app.
+    Accepts: { "device_id": "KAVACH-001", "role": "user"|"guardian", "password": "..." }
     Returns: { "token": "...", "role": "...", "device_id": "..." }
     """
     try:
@@ -154,13 +310,26 @@ def auth_login():
         if not body:
             return jsonify({'status': 'error', 'message': 'JSON body required'}), 400
 
-        device_id = body.get('device_id')
-        role      = body.get('role')
+        device_id = body.get('device_id', '').strip()
+        role      = body.get('role', '').strip()
+        password  = body.get('password', '')
 
         if not device_id:
-            return jsonify({'status': 'error', 'message': 'device_id is required'}), 400
+            return jsonify({'status': 'error', 'message': 'Device ID is required'}), 400
         if role not in ('user', 'guardian'):
-            return jsonify({'status': 'error', 'message': 'role must be "user" or "guardian"'}), 400
+            return jsonify({'status': 'error', 'message': 'Role must be "user" or "guardian"'}), 400
+        if not password:
+            return jsonify({'status': 'error', 'message': 'Password is required'}), 400
+
+        users = _load_app_users()
+        account_key = f"{device_id}_{role}"
+
+        if account_key not in users:
+            return jsonify({'status': 'error', 'message': f'No {role} account found for {device_id}. Please sign up first.'}), 404
+
+        stored = users[account_key]
+        if not _check_password(stored['password_hash'], password):
+            return jsonify({'status': 'error', 'message': 'Incorrect password'}), 401
 
         token = _create_token(device_id, role)
         return jsonify({
@@ -244,6 +413,70 @@ def user_locations():
         return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
+@app.route('/api/user/config', methods=['GET'])
+def get_user_config():
+    """Return the current device config (phone numbers) stored on the server."""
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'user':
+            return jsonify({'status': 'error', 'message': 'User role required'}), 403
+
+        config = _load_device_config(device_id)
+        return jsonify({
+            'status': 'ok',
+            'config': {
+                'police_number':   config.get('police_number', ''),
+                'guardian_number':  config.get('guardian_number', ''),
+                'medical_number':  config.get('medical_number', ''),
+                'whatsapp_number': config.get('whatsapp_number', ''),
+            },
+        }), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/user/config', methods=['PUT'])
+def update_user_config():
+    """Update device phone numbers. The Pi polls this to sync config."""
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'user':
+            return jsonify({'status': 'error', 'message': 'User role required'}), 403
+
+        body = request.get_json()
+        if not body:
+            return jsonify({'status': 'error', 'message': 'JSON body required'}), 400
+
+        allowed_keys = ['police_number', 'guardian_number', 'medical_number', 'whatsapp_number']
+        config = _load_device_config(device_id)
+        for key in allowed_keys:
+            if key in body:
+                val = str(body[key]).strip()
+                if val and not _PHONE_RE.match(val):
+                    return jsonify({'status': 'error', 'message': f'Invalid phone number for {key}'}), 400
+                config[key] = val
+        config['device_id'] = device_id
+        config['updated_at'] = datetime.datetime.now(_UTC).isoformat()
+
+        _save_device_config(device_id, config)
+        logger.info("Config updated for device %s", device_id)
+
+        return jsonify({'status': 'ok', 'message': 'Config saved'}), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/device/config/<device_id>', methods=['GET'])
+def get_device_config(device_id: str):
+    """Pi polls this endpoint to get latest config from the app."""
+    config = _load_device_config(device_id)
+    return jsonify({'status': 'ok', 'config': config}), 200
+
+
 @app.route('/api/guardian/evidence/<int:alert_id>', methods=['GET'])
 def guardian_evidence(alert_id: int):
     """Evidence files for a specific alert (guardian role, SOS/MEDICAL only)."""
@@ -256,7 +489,7 @@ def guardian_evidence(alert_id: int):
         if not alert:
             return jsonify({'status': 'error', 'message': 'Alert not found'}), 404
         if alert.device_id != device_id:
-            return jsonify({'status': 'error', 'message': 'Access denied — wrong device'}), 403
+            return jsonify({'status': 'error', 'message': 'Access denied - wrong device'}), 403
         if alert.alert_type not in ('SOS', 'MEDICAL'):
             return jsonify({'status': 'error', 'message': 'Evidence only available for SOS/MEDICAL alerts'}), 403
 
@@ -268,10 +501,10 @@ def guardian_evidence(alert_id: int):
                     continue
                 fpath = os.path.join(UPLOAD_DIR, fname)
                 evidence.append({
-                    'filename':    fname,
-                    'url':         f'/uploads/{fname}',
-                    'exists':      os.path.exists(fpath),
-                    'size_bytes':  os.path.getsize(fpath) if os.path.exists(fpath) else 0,
+                    'filename':        fname,
+                    'url':             f'/uploads/{fname}',
+                    'file_exists':     os.path.exists(fpath),
+                    'file_size_bytes': os.path.getsize(fpath) if os.path.exists(fpath) else 0,
                 })
 
         return jsonify({
@@ -292,7 +525,7 @@ def guardian_evidence(alert_id: int):
 @app.route('/api/alerts', methods=['POST'])
 def receive_alert():
     rid = _request_id()
-    logger.info("[%s] POST /api/alerts — new request", rid)
+    logger.info("[%s] POST /api/alerts - new request", rid)
 
     try:
         # ── 1. Read and decode encrypted payload ─────────────────────────────
@@ -317,7 +550,7 @@ def receive_alert():
 
         # ── 3. Log decrypted fields ───────────────────────────────────────────
         logger.info(
-            "[%s] Decrypted alert — device=%s type=%s trigger=%s "
+            "[%s] Decrypted alert - device=%s type=%s trigger=%s "
             "gps=%s battery=%s call=%s sms=%s",
             rid,
             data.get('device_id'),
@@ -357,7 +590,7 @@ def receive_alert():
             # Decrypt evidence file if the device encrypted it
             if evidence_encrypted:
                 if not decrypt_file_in_place(path):
-                    logger.error("[%s] Failed to decrypt evidence file: %s — skipping.", rid, field_name)
+                    logger.error("[%s] Failed to decrypt evidence file: %s - skipping.", rid, field_name)
                     continue
 
             fname = os.path.basename(path)
@@ -392,7 +625,7 @@ def receive_alert():
                     "verified": None,
                 }
                 logger.info(
-                    "[%s] No hash provided for %s — computed and stored: %s",
+                    "[%s] No hash provided for %s - computed and stored: %s",
                     rid, fname, computed_hash[:16] + "..."
                 )
 
@@ -421,7 +654,7 @@ def receive_alert():
         )
         DB.session.add(new_alert)
         DB.session.commit()
-        logger.info("[%s] Alert saved to DB — id=%d", rid, new_alert.id)
+        logger.info("[%s] Alert saved to DB - id=%d", rid, new_alert.id)
 
         # ── 9. Build response ─────────────────────────────────────────────────
         response = {
@@ -501,7 +734,7 @@ def _format_uptime(seconds: int) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/alerts
 # Optional: ?device_id=KAVACH-001   ?limit=20
-# FIX ③: clamp limit to [1, 200] — prevents ?limit=-1 dumping the full table
+# FIX ③: clamp limit to [1, 200] - prevents ?limit=-1 dumping the full table
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/api/alerts', methods=['GET'])
 def list_alerts():
@@ -626,6 +859,58 @@ def uploaded_file(filename):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Ngrok tunnel helper
+# ─────────────────────────────────────────────────────────────────────────────
+NGROK_DOMAIN = "unpropitious-braelyn-blossomy.ngrok-free.dev"
+
+def _find_ngrok() -> str:
+    """Return the ngrok executable path, or None if not found."""
+    # Check PATH first
+    import shutil
+    path = shutil.which("ngrok")
+    if path:
+        return path
+    # Common WinGet install location
+    winget_path = os.path.expanduser(
+        r"~\AppData\Local\Microsoft\WinGet\Packages"
+    )
+    if os.path.isdir(winget_path):
+        for dirpath, _, filenames in os.walk(winget_path):
+            for f in filenames:
+                if f.lower() == "ngrok.exe":
+                    return os.path.join(dirpath, f)
+    return None
+
+
+def _start_ngrok(port: int):
+    """Launch ngrok in a background thread if available."""
+    ngrok_exe = _find_ngrok()
+    if not ngrok_exe:
+        logger.warning(
+            "ngrok not found. The server will run locally on port %d only.\n"
+            "  Install ngrok and add it to PATH for remote access.", port
+        )
+        return None
+
+    def _run():
+        cmd = [ngrok_exe, "http", "--url", NGROK_DOMAIN, str(port)]
+        logger.info("Starting ngrok: %s", " ".join(cmd))
+        try:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("ngrok tunnel started: https://%s", NGROK_DOMAIN)
+        except Exception as exc:
+            logger.error("Failed to start ngrok: %s", exc)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return t
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Boot
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
@@ -637,17 +922,32 @@ if __name__ == '__main__':
     logger.info(" Database: kavach.db")
     logger.info(" Upload dir: %s", UPLOAD_DIR)
     logger.info(" Endpoints:")
-    logger.info("   GET  /                  — admin dashboard")
-    logger.info("   POST /api/alerts        — receive telemetry")
-    logger.info("   GET  /api/alerts        — list all alerts")
-    logger.info("   GET  /api/alerts/<id>   — alert detail + hash check")
-    logger.info("   GET  /api/health        — server health")
-    logger.info("   GET  /uploads/<file>    — serve evidence")
-    logger.info("   POST /api/auth/login    — app auth token")
-    logger.info("   GET  /api/user/alerts   — user alerts (app)")
-    logger.info("   GET  /api/guardian/alerts — guardian alerts (app)")
+    logger.info("   GET  /                  - admin dashboard (login required)")
+    logger.info("   GET  /login             - admin login page")
+    logger.info("   GET  /logout            - admin logout")
+    logger.info("   POST /api/alerts        - receive telemetry")
+    logger.info("   GET  /api/alerts        - list all alerts")
+    logger.info("   GET  /api/alerts/<id>   - alert detail + hash check")
+    logger.info("   GET  /api/health        - server health")
+    logger.info("   GET  /uploads/<file>    - serve evidence")
+    logger.info("   POST /api/auth/login    - app auth token")
+    logger.info("   GET  /api/user/alerts   - user alerts (app)")
+    logger.info("   GET  /api/guardian/alerts - guardian alerts (app)")
     logger.info("=" * 55)
 
-    # debug=False in production — debug=True exposes the Werkzeug interactive
+    # Start ngrok tunnel in the background
+    _start_ngrok(8080)
+
+    # Open the dashboard in the default browser after a short delay
+    def _open_browser():
+        import time
+        time.sleep(2)  # wait for Flask to start
+        url = f"https://{NGROK_DOMAIN}"
+        logger.info("Opening browser: %s", url)
+        webbrowser.open(url)
+
+    threading.Thread(target=_open_browser, daemon=True).start()
+
+    # debug=False in production - debug=True exposes the Werkzeug interactive
     # debugger which allows arbitrary code execution.
     app.run(host='0.0.0.0', port=8080, debug=False)

@@ -6,7 +6,10 @@ Adapted from user's script.
 """
 
 import time
-import smbus
+try:
+    import smbus2 as smbus
+except ImportError:
+    import smbus
 
 # Registers
 _REG_CONFIG = 0x00

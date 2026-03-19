@@ -1,0 +1,25 @@
+# Secrets
+Kavach-Server-main/.secret_key
+Kavach-Server-main/app_users.json
+Kavach-Server-main/device_configs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+*.db
+
+# Flutter build outputs
+kavach_app/build/
+kavach_app/.dart_tool/
+kavach_app/.flutter-plugins
+kavach_app/.flutter-plugins-dependencies
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Claude
+.claude/
