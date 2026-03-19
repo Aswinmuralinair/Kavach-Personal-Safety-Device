@@ -65,8 +65,28 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # ─────────────────────────────────────────────────────────────────────────────
 # App-ready API auth (for future mobile app)
 # Uses itsdangerous (bundled with Flask) for signed tokens — no PyJWT needed.
+#
+# FIX: SECRET_KEY is persisted to .secret_key file so auth tokens survive
+# server restarts.  Override via KAVACH_SECRET_KEY env var if desired.
 # ─────────────────────────────────────────────────────────────────────────────
-app.config['SECRET_KEY'] = os.environ.get('KAVACH_SECRET_KEY', os.urandom(32).hex())
+def _load_or_create_secret_key() -> str:
+    """Load SECRET_KEY from env var or .secret_key file; create file if missing."""
+    env_key = os.environ.get('KAVACH_SECRET_KEY')
+    if env_key:
+        return env_key
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    key_file = os.path.join(base_dir, '.secret_key')
+    if os.path.exists(key_file):
+        with open(key_file, 'r') as f:
+            return f.read().strip()
+    # First run — generate and persist
+    new_key = os.urandom(32).hex()
+    with open(key_file, 'w') as f:
+        f.write(new_key)
+    logger.info("[Auth] Generated new SECRET_KEY → saved to .secret_key")
+    return new_key
+
+app.config['SECRET_KEY'] = _load_or_create_secret_key()
 _token_serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 # ─────────────────────────────────────────────────────────────────────────────

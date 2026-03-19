@@ -59,7 +59,9 @@ _SessionFactory = sessionmaker(bind=_ENGINE)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline upload retry queue (in-memory, resets on restart)
-# Each entry: (file_path, alert_row, config_dict)
+# Each entry: (file_path, alert_snapshot_dict, config_dict)
+# alert_snapshot_dict is a plain dict copy of the alert fields — avoids holding
+# references to detached SQLAlchemy objects after session.close().
 # ─────────────────────────────────────────────────────────────────────────────
 _upload_retry_queue = []
 
@@ -72,6 +74,22 @@ _battery_state = {"low_whatsapp_sent": False}
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+class _AlertSnapshot:
+    """Lightweight object that mimics Alert attributes for upload_alert().
+    Used in the retry queue so we don't hold references to detached
+    SQLAlchemy objects after session.close()."""
+    def __init__(self, alert_row):
+        self.device_id           = alert_row.device_id
+        self.timestamp           = alert_row.timestamp
+        self.alert_type          = alert_row.alert_type
+        self.trigger_source      = alert_row.trigger_source
+        self.call_placed_status  = alert_row.call_placed_status
+        self.guardian_sms_status = alert_row.guardian_sms_status
+        self.location_sms_status = alert_row.location_sms_status
+        self.gps_location        = alert_row.gps_location
+        self.battery_percentage  = alert_row.battery_percentage
+
 
 def _load_config() -> dict:
     config_path = os.path.join(_BASE_DIR, 'config.json')
@@ -165,11 +183,14 @@ def _run_update_loop(
     power_monitor,
     alert_label: str,
     uploaded_files: set,
+    alert_start_time: float = 0,
 ) -> None:
     """
     Runs every 60 seconds until _stop_alert_event is set (safe button pressed).
     Sends: GPS location SMS, battery SMS, uploads any NEW evidence files.
     Retries previously failed uploads from the offline queue.
+    Only uploads evidence files created after alert_start_time (prevents
+    uploading stale files from previous alerts).
     """
     logger.info("[%s] Update loop started.", alert_label)
 
@@ -221,12 +242,15 @@ def _run_update_loop(
             _upload_retry_queue[:] = still_queued
 
         # 5. Evidence upload — only files NOT already uploaded this session
+        #    Filter by alert_start_time to avoid uploading old evidence from
+        #    previous alerts that may still be in the evidence/ folder.
         evidence_dir = os.path.join(_BASE_DIR, config.get('evidence_dir', 'evidence'))
         try:
             all_files = [
                 f for f in os.listdir(evidence_dir)
                 if os.path.isfile(os.path.join(evidence_dir, f))
                 and not f.endswith('.txt')
+                and os.path.getmtime(os.path.join(evidence_dir, f)) >= alert_start_time
             ]
             new_files = [f for f in all_files if f not in uploaded_files]
 
@@ -248,8 +272,9 @@ def _run_update_loop(
                     session.commit()
                     logger.info("[%s] Uploaded: %s", alert_label, file_name)
                 else:
-                    # Upload failed — add to offline retry queue
-                    _upload_retry_queue.append((file_path, alert_row, config))
+                    # Upload failed — snapshot alert data and queue for retry
+                    # (snapshot avoids holding detached SQLAlchemy objects)
+                    _upload_retry_queue.append((file_path, _AlertSnapshot(alert_row), config))
                     logger.warning("[%s] Upload failed, QUEUED for retry: %s", alert_label, file_name)
         except Exception as exc:
             logger.error("[%s] Evidence upload error: %s", alert_label, exc)
@@ -277,6 +302,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
       4. Enters 60-second GPS + evidence upload loop until safe_sequence() fires
     """
     _stop_alert_event.clear()
+    alert_start_time = time.time()
 
     # Start evidence recording immediately
     if camera:
@@ -355,6 +381,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         power_monitor=power_monitor,
         alert_label="SOS",
         uploaded_files=set(),
+        alert_start_time=alert_start_time,
     )
 
     session.close()
@@ -374,6 +401,7 @@ def medical_sequence(sim: SIM7600, camera=None, audio_recorder=None) -> None:
       4. Enters the same 60-second GPS + evidence upload loop, tagged "MEDICAL"
     """
     _stop_alert_event.clear()
+    alert_start_time = time.time()
 
     # Start evidence recording immediately
     if camera:
@@ -458,6 +486,7 @@ def medical_sequence(sim: SIM7600, camera=None, audio_recorder=None) -> None:
         power_monitor=power_monitor,
         alert_label="MEDICAL",
         uploaded_files=set(),
+        alert_start_time=alert_start_time,
     )
 
     session.close()

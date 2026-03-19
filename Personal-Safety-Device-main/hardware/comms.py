@@ -183,7 +183,9 @@ class SIM7600:
             # AT+CLBS=4,1 → base station location via network
             success, response = self._send_command('AT+CLBS=4,1', '+CLBS:', 10)
             if success:
-                clbs_data = response.split('+CLBS:')[1].strip().split(',')
+                # Extract only the CLBS line (strip trailing OK/whitespace)
+                clbs_line = response.split('+CLBS:')[1].split('\n')[0].strip()
+                clbs_data = clbs_line.split(',')
                 error_code = int(clbs_data[0].strip())
                 if error_code == 0 and len(clbs_data) >= 3:
                     # SIM7600 returns longitude first, latitude second
@@ -304,7 +306,7 @@ class SIM7600:
     @staticmethod
     def has_internet():
         try:
-            requests.get('https://www.google.com', timeout=5)
+            requests.head('https://www.google.com', timeout=5)
             return True
         except Exception:
             return False

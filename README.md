@@ -241,9 +241,12 @@ Upload dir: ...\uploads
 GET  /                  — admin dashboard
 POST /api/alerts        — receive telemetry
 GET  /api/alerts        — list all alerts
+GET  /api/alerts/<id>   — alert detail + hash check
 GET  /api/health        — server health
 GET  /uploads/<file>    — serve evidence
 POST /api/auth/login    — app auth token
+GET  /api/user/alerts   — user alerts (app)
+GET  /api/guardian/alerts — guardian alerts (app)
 ```
 
 Verify: open `http://localhost:8080/` in your browser to see the admin dashboard, or `http://localhost:8080/api/health` for a health check.
@@ -412,3 +415,16 @@ During SOS and MEDICAL alerts:
 - **Live re-verification** — Server re-computes hashes on demand when viewing an alert detail
 - **No plaintext in transit** — GPS coordinates, alert type, battery status, AND evidence files are all encrypted
 - **Cell tower fallback** — Even without GPS, approximate location is obtained via cell tower triangulation
+- **Persistent auth tokens** — Server SECRET_KEY saved to `.secret_key` file, survives restarts
+
+---
+
+## Bug Fixes (v3.1)
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 1 | Evidence upload grabbed ALL files in `evidence/`, including files from old alerts | Added `alert_start_time` filter — only uploads files created after the current alert started |
+| 2 | Offline retry queue held detached SQLAlchemy objects after `session.close()` | Added `_AlertSnapshot` class — queue stores plain Python objects with copied attributes |
+| 3 | Cell tower accuracy log had `\r\nOK` garbage from AT command response | Isolate CLBS data line (split on `\n`) before parsing fields |
+| 4 | `has_internet()` downloaded full Google homepage (~100KB) on every check | Changed `requests.get` → `requests.head` (fetches headers only) |
+| 5 | Server `SECRET_KEY` regenerated on every restart, invalidating all auth tokens | Key now persists to `.secret_key` file on first run, reloaded on subsequent starts |
