@@ -10,6 +10,7 @@ The project has two parts that run on separate machines:
 |------|--------|---------|----------|
 | **Device** (sensors + alerts) | `Personal-Safety-Device-main/` | Raspberry Pi | Anywhere (with the user) |
 | **Server** (stores alerts + evidence) | `Kavach-Server-main/` | Any PC (Windows/Linux) | Anywhere (exposed via ngrok) |
+| **Mobile App** (monitor + configure) | `kavach_app/` | Android phone | Anywhere (connects via ngrok) |
 
 The Pi and server do **NOT** need to be on the same network. The server is exposed to the internet via **ngrok** (free permanent URL). The Pi can reach it from anywhere in the world.
 
@@ -241,6 +242,18 @@ Any sensor not connected will be automatically replaced by a simulator — the d
 
 ## Running the Project
 
+### Build the Mobile App (on Windows PC — one time)
+
+```bash
+cd kavach_app
+flutter pub get
+flutter build apk --debug
+```
+
+The APK will be at `kavach_app/build/app/outputs/flutter-apk/app-debug.apk`. Transfer it to your Android phone and install.
+
+**Requirements:** Flutter SDK 3.41+, Android SDK, Dart SDK 3.11+.
+
 ### Start the Server FIRST (on Windows PC — one command)
 
 ```bash
@@ -354,6 +367,19 @@ Kavach/
 │   └── keys/
 │       └── chacha.key              ← Same shared encryption key
 │
+├── kavach_app/                     ← Flutter mobile app (Android)
+│   ├── lib/
+│   │   ├── main.dart               ← Entry point, auth gate, theme
+│   │   ├── services/
+│   │   │   └── api_service.dart     ← All API calls to server
+│   │   ├── models/
+│   │   │   └── alert_model.dart     ← Alert data model
+│   │   └── screens/
+│   │       ├── login_screen.dart    ← Login + Signup (User/Guardian)
+│   │       ├── user/               ← User screens (dashboard, alerts, settings, map)
+│   │       └── guardian/            ← Guardian screens (dashboard, alerts)
+│   └── pubspec.yaml                ← Flutter dependencies
+│
 └── README.md                       ← This file
 ```
 
@@ -378,13 +404,17 @@ REST API endpoints ready for a future mobile app:
 
 | Method | Endpoint | Auth | Purpose |
 |--------|----------|------|---------|
-| `POST` | `/api/auth/login` | None | Get auth token (device_id + role) |
+| `POST` | `/api/auth/signup` | None | Create user/guardian account (custom password) |
+| `POST` | `/api/auth/login` | None | Get auth token (device_id + role + password) |
 | `GET` | `/api/user/alerts` | User token | All alerts for the user's device |
 | `GET` | `/api/guardian/alerts` | Guardian token | SOS/MEDICAL alerts only |
 | `GET` | `/api/user/locations` | User token | Location history |
+| `GET` | `/api/user/config` | User token | Get device phone numbers |
+| `PUT` | `/api/user/config` | User token | Update phone numbers (syncs to Pi) |
 | `GET` | `/api/guardian/evidence/<id>` | Guardian token | Evidence files for an alert |
+| `GET` | `/api/device/config/<id>` | Device | Pi polls this to sync config changes |
 
-Tokens are signed with itsdangerous (bundled with Flask) and expire after 24 hours.
+Tokens are signed with itsdangerous (bundled with Flask) and expire after 24 hours. Passwords are hashed with pbkdf2 (via werkzeug).
 
 ### 3. Audio Evidence Recording
 During SOS/MEDICAL alerts, the microphone records 30-second `.wav` clips alongside camera video:
@@ -442,6 +472,29 @@ During SOS and MEDICAL alerts:
 | 3 | Evidence gallery | New tabbed "Evidence Files" view with thumbnails, file type tags, and filter by type |
 | 4 | One-click `start.bat` launcher | Creates venv, installs deps, starts Flask + ngrok + opens browser automatically |
 | 5 | Sign Out button | Header logout link to end admin session |
+
+---
+
+## Changes (v3.3) — Mobile App + Bug Fixes
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | **Kavach Flutter App** | Android app with User and Guardian roles. Login/Signup with custom passwords |
+| 2 | User features | Dashboard (server status, alert counts), alert list, alert detail with map, location history map, settings (change phone numbers remotely) |
+| 3 | Guardian features | Dashboard, alert list with evidence viewer |
+| 4 | Signup/Login system | Custom passwords per device+role, stored with pbkdf2 salted hashing |
+| 5 | Config sync via app | User can change police/guardian/medical/WhatsApp numbers from the app; Pi polls server for changes |
+| 6 | SIM7600 thread-safety | Added threading.Lock to all serial port operations (SMS, call, GPS) to prevent garbled AT responses |
+| 7 | smbus2 import fix | `power.py` now imports `smbus2` correctly (was importing wrong package name) |
+| 8 | Duplicate DB engine removed | `main.py` no longer creates a second SQLAlchemy engine (prevents "database is locked" errors) |
+| 9 | Evidence dir auto-created | `os.makedirs(evidence_dir, exist_ok=True)` prevents upload failures if folder missing |
+| 10 | XSS protection | Dashboard HTML-escapes all user-controlled data (device_id, trigger_source, etc.) |
+| 11 | Password security | Switched from bare SHA-256 to werkzeug pbkdf2 with salt. Backwards-compatible with legacy hashes |
+| 12 | Phone number validation | Config update endpoint validates phone numbers against regex before saving |
+| 13 | App null token fix | Bearer header no longer sends literal "null" when token is missing |
+| 14 | App response handling | All API calls now handle non-JSON responses (ngrok errors, 500s) without crashing |
+| 15 | App token expiry | Auto-clears credentials on 401, prompting re-login instead of showing generic errors |
+| 16 | Battery parse fix | `AlertModel` now safely parses battery percentage as string or number (handles "N/A", "93%", etc.) |
 
 ---
 
