@@ -23,8 +23,9 @@ FIXES APPLIED:
 
   ⑤ Replaced bare print() calls with proper logging.
 
-  ⑥ Cell tower location fallback — when GPS fix fails, uses AT+CLBS=4,1 to
-      get approximate location from cell towers (100-2000m accuracy).
+  ⑥ Cell tower location fallback — when GPS fix fails, uses Unwired Labs
+      Cloud LBS API (AT+CPSI? → parse tower IDs → API lookup) to get
+      approximate location from cell towers (100-2000m accuracy).
 
   ⑦ Evidence file encryption — upload_alert() now encrypts the evidence file
       bytes with ChaCha20-Poly1305 before uploading + sends SHA-256 hash of
@@ -38,6 +39,7 @@ import json
 import base64
 import os
 import io
+import re
 import hashlib
 import logging
 import requests
@@ -46,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 
 class SIM7600:
-    def __init__(self, port, baud=115200, timeout=1):
+    def __init__(self, port, baud=115200, timeout=1, api_token=None):
+        self.api_token = api_token   # Unwired Labs API token for cell tower location
         try:
             self.ser = serial.Serial(port, baud, timeout=timeout)
             logger.info("[SIM7600] Initialized on %s @ %d baud.", port, baud)
@@ -163,42 +166,85 @@ class SIM7600:
         self._send_command('AT+CGPS=0', 'OK', 1)
         return coordinates
 
-    # ── Cell tower location fallback ─────────────────────────────────────────
+    # ── Cell tower location fallback (Unwired Labs Cloud LBS API) ───────────
     def _get_cell_tower_location(self):
         """
-        Use SIM7600's AT+CLBS command for cell tower triangulation.
+        Use Unwired Labs Cloud LBS API for cell tower location.
         Returns "lat,lon" string or None on failure.
-        Accuracy: typically 100-2000 metres (approximate, network dependent).
+        Accuracy: typically 100-2000 metres (network dependent).
 
-        FIX ⑥: Called automatically when GPS fix fails.
+        FIX ⑥: Called automatically when GPS fix fails after 5 attempts.
 
-        NOTE: AT+CLBS=4,1 response format from SIM7600:
-            +CLBS: 0,<longitude>,<latitude>,<accuracy>
-        Longitude comes FIRST — this is a known quirk of the SIM7600.
-        We swap them to return "lat,lon" matching the GPS return format.
+        How it works:
+          1. Send AT+CPSI? to SIM7600 → get raw cell tower IDs (MCC, MNC, LAC, CID)
+          2. POST those IDs to Unwired Labs API → API returns lat/lon
+          3. Requires api_token in config.json (free tier: 100 requests/day)
         """
         if not self.ser:
             return None
+
+        if not self.api_token:
+            logger.warning("[SIM7600] No Unwired Labs API token — cell tower fallback disabled.")
+            return None
+
         try:
-            # AT+CLBS=4,1 → base station location via network
-            success, response = self._send_command('AT+CLBS=4,1', '+CLBS:', 10)
-            if success:
-                # Extract only the CLBS line (strip trailing OK/whitespace)
-                clbs_line = response.split('+CLBS:')[1].split('\n')[0].strip()
-                clbs_data = clbs_line.split(',')
-                error_code = int(clbs_data[0].strip())
-                if error_code == 0 and len(clbs_data) >= 3:
-                    # SIM7600 returns longitude first, latitude second
-                    longitude = float(clbs_data[1].strip())
-                    latitude  = float(clbs_data[2].strip())
-                    accuracy  = clbs_data[3].strip() if len(clbs_data) > 3 else "unknown"
+            # Step 1: Get cell tower info from modem
+            success, response = self._send_command('AT+CPSI?', '+CPSI:', 3)
+            if not success or 'Online' not in response:
+                logger.warning("[SIM7600] Modem not online — cannot get tower info.")
+                return None
+
+            # Step 2: Parse MCC, MNC, LAC, CID from AT+CPSI? response
+            # Example: +CPSI: LTE,Online,404-95,0x0D5D,233413644,...
+            match = re.search(r'(\d{3})-(\d{2,3}),0x([0-9A-Fa-f]+),(\d+)', response)
+            if not match:
+                logger.warning("[SIM7600] Could not parse cell tower IDs from AT+CPSI? response.")
+                return None
+
+            mcc = int(match.group(1))
+            mnc = int(match.group(2))
+            lac = int(match.group(3), 16)   # hex → int
+            cid = int(match.group(4))
+
+            logger.info(
+                "[SIM7600] Cell tower identified: MCC=%d MNC=%d LAC=%d CID=%d",
+                mcc, mnc, lac, cid
+            )
+
+            # Step 3: Send tower IDs to Unwired Labs API
+            url = "https://us1.unwiredlabs.com/v2/process.php"
+            payload = {
+                "token": self.api_token,
+                "radio": "lte",
+                "mcc": mcc,
+                "mnc": mnc,
+                "cells": [{"lac": lac, "cid": cid}],
+                "address": 1,
+            }
+
+            r = requests.post(url, json=payload, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get('status') == 'ok':
+                    lat = data.get('lat')
+                    lon = data.get('lon')
+                    accuracy = data.get('accuracy', 'unknown')
+                    address = data.get('address', '')
                     logger.info(
                         "[SIM7600] Cell tower fix: lat=%.6f lon=%.6f accuracy=%sm (TOWER)",
-                        latitude, longitude, accuracy
+                        lat, lon, accuracy
                     )
-                    return f"{latitude},{longitude}"
+                    if address:
+                        logger.info("[SIM7600] Tower address: %s", address)
+                    return f"{lat},{lon}"
                 else:
-                    logger.warning("[SIM7600] CLBS error code: %d", error_code)
+                    logger.warning(
+                        "[SIM7600] Unwired Labs API error: %s",
+                        data.get('message', 'unknown')
+                    )
+            else:
+                logger.warning("[SIM7600] Unwired Labs API returned HTTP %d.", r.status_code)
+
             return None
         except Exception as e:
             logger.error("[SIM7600] Cell tower location error: %s", e)

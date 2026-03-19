@@ -249,6 +249,7 @@ def validate_config(config: dict) -> None:
         'server_public_url': 'http://your-server-ip:8080/uploads/',
         'whatsapp_number':   '+91XXXXXXXXXX',
         'whatsapp_apikey':   'YOUR_CALLMEBOT_APIKEY',
+        'api_token':         'YOUR_UNWIREDLABS_API_TOKEN',
     }
     for key, placeholder in placeholders.items():
         if config.get(key) == placeholder:
@@ -495,7 +496,11 @@ if __name__ == '__main__':
     logger.info("[Boot] Config loaded. Device ID: %s", config.get('device_id'))
 
     # ── 3. Single shared SIM7600 instance ─────────────────────────────────────
-    sim = SIM7600(port=config['serial_port'], baud=config['baud_rate'])
+    sim = SIM7600(
+        port=config['serial_port'],
+        baud=config['baud_rate'],
+        api_token=config.get('api_token'),
+    )
     logger.info("[Boot] SIM7600 initialized on %s.", config['serial_port'])
 
     # ── 4. Camera manager ─────────────────────────────────────────────────────

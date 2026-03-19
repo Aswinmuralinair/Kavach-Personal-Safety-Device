@@ -75,7 +75,7 @@ MEDICAL alert is the same but calls the medical number and sends "MEDICAL EMERGE
 The device uses a **GPS-first, cell-tower-fallback** approach:
 
 1. **GPS** (via SIM7600 AT+CGPSINFO) — tries 5 times (~20 seconds). Accuracy: 2-10 metres.
-2. **Cell Tower** (via SIM7600 AT+CLBS=4,1) — if GPS fails, falls back to cell tower triangulation. Accuracy: 100-2000 metres.
+2. **Cell Tower** (via Unwired Labs Cloud LBS API) — if GPS fails, reads cell tower IDs (MCC, MNC, LAC, CID) from the SIM7600 via `AT+CPSI?`, then sends them to the Unwired Labs API to get coordinates. Accuracy: 100-2000 metres. Requires `api_token` in config.json (free tier: 100 requests/day at [unwiredlabs.com](https://unwiredlabs.com)).
 
 This repeats every 60-second cycle during an active alert — so if GPS becomes available later (e.g. user moves outdoors), it automatically switches back to GPS.
 
@@ -177,7 +177,8 @@ Open `Personal-Safety-Device-main/config.json`:
   "server_public_url": "http://192.168.1.50:8080/uploads/",
   "evidence_dir": "evidence",
   "whatsapp_number": "+919876543210",
-  "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY"
+  "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY",
+  "api_token": "YOUR_UNWIREDLABS_API_TOKEN"
 }
 ```
 
@@ -188,6 +189,7 @@ Replace:
 - `serial_port` — check with `ls /dev/ttyUSB*` after plugging in the SIM7600
 - `whatsapp_number` — your WhatsApp number with country code (for alerts)
 - `whatsapp_apikey` — your CallMeBot API key (see WhatsApp setup in Features section)
+- `api_token` — your Unwired Labs API token (sign up free at [unwiredlabs.com](https://unwiredlabs.com), get 100 requests/day)
 
 ### 5. Download the Audio AI Model (on the Pi, once)
 
