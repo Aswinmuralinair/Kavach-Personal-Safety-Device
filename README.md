@@ -6,10 +6,12 @@ Kavach is a Raspberry Pi-based personal safety device that detects emergencies (
 
 The project has two parts that run on separate machines:
 
-| Part | Folder | Runs on |
-|------|--------|---------|
-| **Device** (sensors + alerts) | `Personal-Safety-Device-main/` | Raspberry Pi |
-| **Server** (stores alerts + evidence) | `Kavach-Server-main/` | Any PC (Windows/Linux) |
+| Part | Folder | Runs on | Location |
+|------|--------|---------|----------|
+| **Device** (sensors + alerts) | `Personal-Safety-Device-main/` | Raspberry Pi | Anywhere (with the user) |
+| **Server** (stores alerts + evidence) | `Kavach-Server-main/` | Any PC (Windows/Linux) | Anywhere (exposed via ngrok) |
+
+The Pi and server do **NOT** need to be on the same network. The server is exposed to the internet via **ngrok** (free permanent URL). The Pi can reach it from anywhere in the world.
 
 **All data is encrypted end-to-end:**
 - Telemetry (GPS, battery, alert type) → ChaCha20-Poly1305 encrypted
@@ -151,14 +153,23 @@ pip install SQLAlchemy requests pyserial cryptography numpy sounddevice RPi.GPIO
 
 > **Note:** `picamera2` is pre-installed on Raspberry Pi OS. If missing: `sudo apt install python3-picamera2`
 
-### 3. Find Your Windows PC's IP Address
+### 3. Set Up ngrok (Remote Access — Pi and Server on different networks)
 
-On the server machine, open Command Prompt and run:
-```
-ipconfig
+The device (Pi) and server (laptop) do NOT need to be on the same Wi-Fi. We use **ngrok** to give your laptop a permanent public URL that the Pi can reach from anywhere in the world.
+
+**One-time setup:**
+
+1. Install ngrok: `winget install ngrok.ngrok` (Windows) or download from [ngrok.com](https://ngrok.com/download)
+2. Sign up free at [ngrok.com](https://ngrok.com) → get your **authtoken** from the dashboard
+3. Run: `ngrok config add-authtoken YOUR_TOKEN_HERE`
+4. Go to **Domains** in the ngrok dashboard → click **New Domain** → get your free permanent domain (e.g. `your-name.ngrok-free.dev`)
+
+**Every time you start the server, also start ngrok in a second terminal:**
+```bash
+ngrok http --domain your-name.ngrok-free.dev 8080
 ```
 
-Look for your Wi-Fi or Ethernet adapter's **IPv4 Address** (e.g. `192.168.1.50`). Both machines must be on the same network.
+> **Note:** If both machines ARE on the same network, you can skip ngrok and use `http://<local-ip>:8080` instead.
 
 ### 4. Edit config.json (on the Pi)
 
@@ -173,8 +184,8 @@ Open `Personal-Safety-Device-main/config.json`:
   "police_number": "100",
   "guardian_number": "+919876543210",
   "medical_number": "+919876543211",
-  "server_url": "http://192.168.1.50:8080/api/alerts",
-  "server_public_url": "http://192.168.1.50:8080/uploads/",
+  "server_url": "https://your-name.ngrok-free.dev/api/alerts",
+  "server_public_url": "https://your-name.ngrok-free.dev/uploads/",
   "evidence_dir": "evidence",
   "whatsapp_number": "+919876543210",
   "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY",
@@ -185,7 +196,7 @@ Open `Personal-Safety-Device-main/config.json`:
 Replace:
 - `guardian_number` — your guardian's real phone number
 - `medical_number` — a medical contact's number
-- `192.168.1.50` — your server PC's actual IP address
+- `your-name.ngrok-free.dev` — your actual ngrok domain
 - `serial_port` — check with `ls /dev/ttyUSB*` after plugging in the SIM7600
 - `whatsapp_number` — your WhatsApp number with country code (for alerts)
 - `whatsapp_apikey` — your CallMeBot API key (see WhatsApp setup in Features section)
@@ -228,14 +239,20 @@ Any sensor not connected will be automatically replaced by a simulator — the d
 
 ## Running the Project
 
-### Start the Server FIRST (on Windows PC)
+### Start the Server FIRST (on Windows PC — two terminals)
 
+**Terminal 1: Start Flask server**
 ```bash
 cd Kavach-Server-main
 python app.py
 ```
 
-Expected output:
+**Terminal 2: Start ngrok tunnel**
+```bash
+ngrok http --domain your-name.ngrok-free.dev 8080
+```
+
+Expected server output:
 ```
 Kavach Server v2.0 starting
 Database: kavach.db
@@ -251,9 +268,9 @@ GET  /api/user/alerts   — user alerts (app)
 GET  /api/guardian/alerts — guardian alerts (app)
 ```
 
-Verify: open `http://localhost:8080/` in your browser to see the admin dashboard, or `http://localhost:8080/api/health` for a health check.
+Verify: open `https://your-name.ngrok-free.dev/` in your browser to see the admin dashboard, or `https://your-name.ngrok-free.dev/api/health` for a health check.
 
-### Start the Device (on the Raspberry Pi)
+### Start the Device (on the Raspberry Pi — can be anywhere in the world)
 
 ```bash
 cd Personal-Safety-Device-main
@@ -286,8 +303,8 @@ Button functions (SOS / Medical / Safe) → physical GPIO button only
 
 | Step | Action | What Happens |
 |------|--------|-------------|
-| 1 | Start server on Windows PC | Show health endpoint in browser |
-| 2 | Start device on Pi | Show boot logs, all subsystems initializing |
+| 1 | Start server + ngrok on Windows PC | Show health endpoint in browser |
+| 2 | Start device on Pi (any network) | Show boot logs, all subsystems initializing |
 | 3 | **Single press** the physical button | SOS: camera starts, call police + SMS + GPS loop |
 | 4 | Wait 60 seconds | Show evidence upload + GPS update cycle in logs |
 | 5 | **Long press** the button (5s) | Camera stops, "I AM SAFE" SMS, alert cancelled |
@@ -299,9 +316,9 @@ Button functions (SOS / Medical / Safe) → physical GPIO button only
 | 11 | **Long press** to cancel | |
 | 12 | **Double tap** the button quickly | MEDICAL alert: calls medical number |
 | 13 | **Long press** to cancel | |
-| 14 | Open `http://<server-ip>:8080/` | Show admin dashboard with map, stats, and alerts |
-| 15 | Open `http://<server-ip>:8080/api/alerts/1` | Show SHA-256 hash verification of evidence |
-| 16 | Open `http://<server-ip>:8080/uploads/<filename>` | Show actual evidence file (decrypted video/audio) |
+| 14 | Open `https://your-name.ngrok-free.dev/` | Show admin dashboard with map, stats, and alerts |
+| 15 | Open `https://your-name.ngrok-free.dev/api/alerts/1` | Show SHA-256 hash verification of evidence |
+| 16 | Open `https://your-name.ngrok-free.dev/uploads/<filename>` | Show actual evidence file (decrypted video/audio) |
 
 **Remember:** Cancel each alert with a **long press** before triggering the next one — only one alert can run at a time.
 
