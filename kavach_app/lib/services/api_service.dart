@@ -1,10 +1,6 @@
 import 'dart:convert';
-import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-
-/// Global navigator key for redirecting to login on token expiry
-final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 class ApiService {
   // Change this to your ngrok domain

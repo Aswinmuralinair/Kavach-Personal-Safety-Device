@@ -98,10 +98,14 @@ The server is a Flask web app with these endpoints:
 | `GET` | `/api/alerts/<id>` | Single alert detail with file integrity verification |
 | `GET` | `/api/health` | Server + database health check |
 | `GET` | `/uploads/<file>` | Serve decrypted evidence files |
+| `POST` | `/api/auth/signup` | Create user/guardian account for mobile app |
 | `POST` | `/api/auth/login` | Get auth token for mobile app |
 | `GET` | `/api/user/alerts` | User's alerts (token auth) |
 | `GET` | `/api/guardian/alerts` | Guardian's SOS/MEDICAL alerts (token auth) |
 | `GET` | `/api/user/locations` | Location history (token auth) |
+| `GET` | `/api/user/config` | Get device phone numbers (token auth) |
+| `PUT` | `/api/user/config` | Update phone numbers from app (token auth) |
+| `GET` | `/api/device/config/<id>` | Pi polls this for config updates |
 | `GET` | `/api/guardian/evidence/<id>` | Evidence files for alert (token auth) |
 
 When the device sends data:
