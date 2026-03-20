@@ -4,8 +4,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/login_screen.dart';
 import 'screens/user/user_home_screen.dart';
 import 'screens/guardian/guardian_home_screen.dart';
+import 'services/notification_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService.init();
   runApp(const KavachApp());
 }
 
@@ -244,6 +247,7 @@ class _AuthGateState extends State<AuthGate> {
     if (!mounted) return;
 
     if (token != null && role != null) {
+      NotificationService.startPolling(role: role);
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
