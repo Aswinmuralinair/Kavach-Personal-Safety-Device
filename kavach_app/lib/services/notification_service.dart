@@ -17,13 +17,14 @@ class NotificationService {
     const initSettings = InitializationSettings(android: androidSettings);
 
     await _plugin.initialize(initSettings);
+    _initialized = true;
+  }
 
-    // Request notification permission on Android 13+
+  /// Request notification permission (call after UI is ready)
+  static Future<void> requestPermission() async {
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     await android?.requestNotificationsPermission();
-
-    _initialized = true;
   }
 
   /// Start polling for new alerts. Call after login.

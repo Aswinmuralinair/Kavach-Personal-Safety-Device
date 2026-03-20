@@ -240,6 +240,9 @@ class _AuthGateState extends State<AuthGate> {
   }
 
   Future<void> _checkAuth() async {
+    // Request notification permission once UI is ready
+    await NotificationService.requestPermission();
+
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
     final role = prefs.getString('role');
