@@ -23,7 +23,7 @@ The Pi and server do **NOT** need to be on the same network. The server is expos
 
 ## How the Device Works
 
-When you run `python main.py` on the Pi, it starts 8 subsystems simultaneously:
+When you run `python main.py` on the Pi, it starts 10 subsystems simultaneously:
 
 1. **Physical Button** (GPIO 23) — polled 50 times/second for press patterns
 2. **IMU** (BNO055 via I2C) — checks for falls 10 times/second
@@ -32,7 +32,9 @@ When you run `python main.py` on the Pi, it starts 8 subsystems simultaneously:
 5. **Pi Camera** (CSI interface via picamera2) — records 30-second H264 evidence clips during alerts
 6. **Microphone Recorder** (sounddevice) — records 30-second WAV audio evidence during alerts
 7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
-8. **Keyboard** — `f`, `h`, `a` keys to simulate sensors without hardware (for demos)
+8. **Config Sync** — polls server every 60s for config changes + sends battery heartbeat
+9. **Power Monitor** (INA219 via I2C) — reads battery voltage for heartbeat reporting
+10. **Keyboard** — `f`, `h`, `a`, `s`, `d`, `l`, `q` keys to simulate sensors without hardware (for demos)
 
 If any sensor hardware is not connected, the code **auto-detects** and falls back to a simulator that does nothing until triggered by keyboard.
 
@@ -88,25 +90,26 @@ This repeats every 60-second cycle during an active alert — so if GPS becomes 
 
 The server is a Flask web app with these endpoints:
 
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| `GET` | `/` | Admin web dashboard (login required) |
-| `GET` | `/login` | Admin login page |
-| `GET` | `/logout` | Admin logout |
-| `POST` | `/api/alerts` | Receive encrypted telemetry + encrypted evidence from device |
-| `GET` | `/api/alerts` | List all alerts (for dashboard) |
-| `GET` | `/api/alerts/<id>` | Single alert detail with file integrity verification |
-| `GET` | `/api/health` | Server + database health check |
-| `GET` | `/uploads/<file>` | Serve decrypted evidence files |
-| `POST` | `/api/auth/signup` | Create user/guardian account for mobile app |
-| `POST` | `/api/auth/login` | Get auth token for mobile app |
-| `GET` | `/api/user/alerts` | User's alerts (token auth) |
-| `GET` | `/api/guardian/alerts` | Guardian's SOS/MEDICAL alerts (token auth) |
-| `GET` | `/api/user/locations` | Location history (token auth) |
-| `GET` | `/api/user/config` | Get device phone numbers (token auth) |
-| `PUT` | `/api/user/config` | Update phone numbers from app (token auth) |
-| `GET` | `/api/device/config/<id>` | Pi polls this for config updates |
-| `GET` | `/api/guardian/evidence/<id>` | Evidence files for alert (token auth) |
+| Method | Endpoint | Auth | Purpose |
+|--------|----------|------|---------|
+| `GET` | `/` | Admin session | Admin web dashboard |
+| `GET` | `/login` | None | Admin login page |
+| `GET` | `/logout` | None | Admin logout |
+| `POST` | `/api/alerts` | Encrypted payload | Receive encrypted telemetry + evidence from device |
+| `GET` | `/api/alerts` | Session or token | List all alerts |
+| `GET` | `/api/alerts/<id>` | Session or token | Alert detail with file integrity verification |
+| `GET` | `/api/health` | None | Server + database health check |
+| `GET` | `/uploads/<file>` | Session, token, or signed URL | Serve decrypted evidence files |
+| `POST` | `/api/auth/signup` | None | Create user/guardian account for mobile app |
+| `POST` | `/api/auth/login` | None | Get auth token for mobile app |
+| `GET` | `/api/user/alerts` | User token | User's alerts |
+| `GET` | `/api/guardian/alerts` | Guardian token | Guardian's SOS/MEDICAL alerts |
+| `GET` | `/api/user/locations` | User token | Location history |
+| `GET` | `/api/user/config` | User token | Get device phone numbers |
+| `PUT` | `/api/user/config` | User token | Update phone numbers from app |
+| `GET` | `/api/device/config/<id>` | Device key | Pi polls this for config updates + sends battery heartbeat |
+| `GET` | `/api/device/status/<id>` | Session or token | Live device battery + online/offline status |
+| `GET` | `/api/guardian/evidence/<id>` | Guardian token | Evidence files for alert (returns signed download URLs) |
 
 When the device sends data:
 1. Server receives the encrypted telemetry payload
@@ -196,7 +199,8 @@ Open `Personal-Safety-Device-main/config.json`:
   "evidence_dir": "evidence",
   "whatsapp_number": "+919876543210",
   "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY",
-  "api_token": "YOUR_UNWIREDLABS_API_TOKEN"
+  "api_token": "YOUR_UNWIREDLABS_API_TOKEN",
+  "device_key": "kavach-device-key-2026"
 }
 ```
 
@@ -208,6 +212,7 @@ Replace:
 - `whatsapp_number` — your WhatsApp number with country code (for alerts)
 - `whatsapp_apikey` — your CallMeBot API key (see WhatsApp setup in Features section)
 - `api_token` — your Unwired Labs API token (sign up free at [unwiredlabs.com](https://unwiredlabs.com), get 100 requests/day)
+- `device_key` — must match the server's `KAVACH_DEVICE_KEY` env var (default: `kavach-device-key-2026`)
 
 ### 5. Download the Audio AI Model (on the Pi, once)
 
@@ -297,10 +302,11 @@ Triggers active:
   Microphone           → Audio evidence recording during alerts
   LoRa RX              → Mesh relay
 
-Keyboard shortcuts (sensors without hardware):
+Keyboard shortcuts (desktop demo — sensors without hardware):
   f → Fall detected      h → Heart rate spike
-  a → Audio danger       q → Quit
-Button functions (SOS / Medical / Safe) → physical GPIO button only
+  a → Audio danger       s → SOS (button press)
+  d → MEDICAL (double press)  l → SAFE (long press)
+  q → Quit
 ```
 
 ---
@@ -323,8 +329,8 @@ Button functions (SOS / Medical / Safe) → physical GPIO button only
 | 12 | **Double tap** the button quickly | MEDICAL alert: calls medical number |
 | 13 | **Long press** to cancel | |
 | 14 | Open `https://your-name.ngrok-free.dev/` | Login with admin/kavach2026, show dashboard with map, stats, alerts, and evidence gallery |
-| 15 | Open `https://your-name.ngrok-free.dev/api/alerts/1` | Show SHA-256 hash verification of evidence |
-| 16 | Open `https://your-name.ngrok-free.dev/uploads/<filename>` | Show actual evidence file (decrypted video/audio) |
+| 15 | Open `https://your-name.ngrok-free.dev/api/alerts/1` in same browser (admin session) | Show SHA-256 hash verification of evidence |
+| 16 | Click an evidence link from the dashboard or alert detail | Evidence served via signed download URL (requires auth) |
 
 **Remember:** Cancel each alert with a **long press** before triggering the next one — only one alert can run at a time.
 
@@ -415,8 +421,9 @@ REST API endpoints used by the Kavach Flutter app:
 | `GET` | `/api/user/locations` | User token | Location history |
 | `GET` | `/api/user/config` | User token | Get device phone numbers |
 | `PUT` | `/api/user/config` | User token | Update phone numbers (syncs to Pi) |
-| `GET` | `/api/guardian/evidence/<id>` | Guardian token | Evidence files for an alert |
-| `GET` | `/api/device/config/<id>` | Device | Pi polls this to sync config changes |
+| `GET` | `/api/guardian/evidence/<id>` | Guardian token | Evidence files (returns signed download URLs) |
+| `GET` | `/api/device/config/<id>` | Device key | Pi polls for config + sends battery heartbeat |
+| `GET` | `/api/device/status/<id>` | User/Guardian token | Live device battery + online/offline |
 
 Tokens are signed with itsdangerous (bundled with Flask) and expire after 24 hours. Passwords are hashed with pbkdf2 (via werkzeug).
 
@@ -462,6 +469,9 @@ During SOS and MEDICAL alerts:
 - **Evidence integrity** — SHA-256 hashes of original files sent alongside; server verifies after decryption
 - **Live re-verification** — Server re-computes hashes on demand when viewing an alert detail
 - **No plaintext in transit** — GPS coordinates, alert type, battery status, AND evidence files are all encrypted
+- **Authenticated API** — All data routes require admin session, Bearer token, or device key (no public access to alerts, evidence, or config)
+- **Signed download URLs** — Evidence file links include a 1-hour signed token so the app can open files in the browser without exposing raw `/uploads/` paths
+- **Device key auth** — Pi authenticates to the server via `X-Device-Key` header when polling config
 - **Cell tower fallback** — Even without GPS, approximate location is obtained via cell tower triangulation
 - **Persistent auth tokens** — Server SECRET_KEY saved to `.secret_key` file, survives restarts
 
@@ -484,7 +494,7 @@ During SOS and MEDICAL alerts:
 | # | Change | Details |
 |---|--------|---------|
 | 1 | **Kavach Flutter App** | Android app with User and Guardian roles. Login/Signup with custom passwords |
-| 2 | User features | Dashboard (server status, alert counts), alert list, alert detail with map, location history map, settings (change phone numbers remotely) |
+| 2 | User features | Dashboard (live device battery + online/offline status, alert counts), alert list, alert detail with map, location history map, settings (change phone numbers remotely) |
 | 3 | Guardian features | Dashboard, alert list with evidence viewer |
 | 4 | Signup/Login system | Custom passwords per device+role, stored with pbkdf2 salted hashing |
 | 5 | Config sync via app | User can change police/guardian/medical/WhatsApp numbers from the app; Pi polls server for changes |
@@ -511,3 +521,19 @@ During SOS and MEDICAL alerts:
 | 3 | Cell tower accuracy log had `\r\nOK` garbage from AT command response | Isolate CLBS data line (split on `\n`) before parsing fields |
 | 4 | `has_internet()` downloaded full Google homepage (~100KB) on every check | Changed `requests.get` → `requests.head` (fetches headers only) |
 | 5 | Server `SECRET_KEY` regenerated on every restart, invalidating all auth tokens | Key now persists to `.secret_key` file on first run, reloaded on subsequent starts |
+
+---
+
+## Changes (v3.4) — Security + Live Battery
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | **Server route authentication** | `GET /api/alerts`, `/api/alerts/<id>` now require admin session or Bearer token. `GET /uploads/<file>` requires session, token, or signed download URL. `GET /api/device/config/<id>` requires `X-Device-Key` header. No data routes are publicly accessible |
+| 2 | **Signed evidence download URLs** | Evidence URLs returned by the API include a 1-hour signed token (`?token=xxx`). Allows the app to open files in an external browser without needing auth headers |
+| 3 | **Device key authentication** | Pi sends `X-Device-Key` header when polling `/api/device/config`. Server validates against `KAVACH_DEVICE_KEY` env var (default: `kavach-device-key-2026`). Added `device_key` field to `config.json` |
+| 4 | **Battery heartbeat** | Pi sends `X-Battery` header (e.g. `85%`) with every config poll (every 60s). Server stores battery + last-seen timestamp in memory per device |
+| 5 | **Live device status endpoint** | New `GET /api/device/status/<device_id>` returns battery percentage + online/offline. Device is "offline" if no heartbeat in 2 minutes |
+| 6 | **Live battery on app dashboard** | User dashboard now shows "Device Online/Offline" with live battery percentage instead of server uptime. Polls every 60 seconds. Shows "No heartbeat received" when device is offline |
+| 7 | **Battery display fix** | Removed double `%%` bug in dashboard HTML and Flutter alert detail screen. Battery is stored as `"85%"` (string with `%`), so UI no longer appends an extra `%` |
+| 8 | **WhatsApp integration** | All alert sequences (SOS, MEDICAL, SAFE) now send WhatsApp messages via CallMeBot. Low-battery WhatsApp alert at 15% (once per boot). Silently skips if not configured |
+| 9 | **API token guard** | Cell tower fallback in `comms.py` skips gracefully if `api_token` starts with `YOUR_` (placeholder detection) |
