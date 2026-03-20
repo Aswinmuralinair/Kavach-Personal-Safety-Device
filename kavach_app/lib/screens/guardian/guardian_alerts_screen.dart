@@ -115,10 +115,17 @@ class _GuardianAlertCardState extends State<_GuardianAlertCard> {
     if (mounted) setState(() => _loadingEvidence = false);
   }
 
-  void _openFile(String filename) async {
-    final url = ApiService.evidenceUrl(filename);
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  void _openFile(String signedUrl) async {
+    // signedUrl is e.g. "/uploads/file.mp4?token=xxx" — prepend base URL
+    final fullUrl = '${ApiService.baseUrl}$signedUrl';
+    try {
+      await launchUrl(Uri.parse(fullUrl), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open evidence file')),
+        );
+      }
     }
   }
 
@@ -280,7 +287,7 @@ class _GuardianAlertCardState extends State<_GuardianAlertCard> {
                             ? IconButton(
                                 icon: const Icon(Icons.open_in_new,
                                     size: 18),
-                                onPressed: () => _openFile(fname),
+                                onPressed: () => _openFile(e['url'] ?? '/uploads/$fname'),
                               )
                             : const Icon(Icons.error_outline,
                                 size: 18, color: Colors.red),
