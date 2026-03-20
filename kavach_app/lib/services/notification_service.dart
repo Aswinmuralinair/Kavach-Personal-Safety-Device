@@ -32,7 +32,7 @@ class NotificationService {
     // Poll immediately, then every 15 seconds
     _checkForNewAlerts(role);
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 15),
+      const Duration(seconds: 5),
       (_) => _checkForNewAlerts(role),
     );
   }
