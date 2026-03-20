@@ -54,8 +54,11 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
     return LatLng(lat, lon);
   }
 
-  void _openEvidence(String filename) async {
-    final url = '${ApiService.baseUrl}/uploads/$filename';
+  void _openEvidence(String publicUrl) async {
+    // publicUrl comes from the server with a signed download token already
+    // appended (e.g. "/uploads/file.wav?token=xxx"), so we just prepend the
+    // base URL. The token gives time-limited access without needing headers.
+    final url = '${ApiService.baseUrl}$publicUrl';
     if (await canLaunchUrl(Uri.parse(url))) {
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     }
@@ -172,7 +175,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                   icon: Icons.battery_full,
                   label: 'Battery',
                   value: _alert?['battery_percentage'] != null
-                      ? '${_alert!['battery_percentage']}%'
+                      ? '${_alert!['battery_percentage']}'
                       : 'N/A',
                 ),
                 _DetailRow(
@@ -307,7 +310,8 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                       trailing: exists
                           ? IconButton(
                               icon: const Icon(Icons.open_in_new),
-                              onPressed: () => _openEvidence(fname),
+                              onPressed: () => _openEvidence(
+                                  e['public_url'] ?? '/uploads/$fname'),
                             )
                           : const Icon(Icons.error_outline, color: Colors.red),
                     );

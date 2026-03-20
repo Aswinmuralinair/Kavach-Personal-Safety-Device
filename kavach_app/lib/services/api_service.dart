@@ -182,6 +182,17 @@ class ApiService {
     return _handleResponse(response);
   }
 
+  // ── Device Status (live battery + online/offline) ───────────────────
+
+  static Future<Map<String, dynamic>> getDeviceStatus(
+      String deviceId) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/device/status/$deviceId'),
+      headers: await _authHeaders(),
+    );
+    return _handleResponse(response);
+  }
+
   // ── Helper: build full URL for evidence files ─────────────────────────
 
   static String evidenceUrl(String filename) {

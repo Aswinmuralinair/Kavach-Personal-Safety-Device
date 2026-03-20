@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/api_service.dart';
 import '../../models/alert_model.dart';
 import 'alert_detail_screen.dart';
@@ -17,10 +19,56 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
   List<AlertModel> _recentAlerts = [];
   Map<String, dynamic>? _health;
 
+  // Live device status (battery + online/offline)
+  String _deviceBattery = 'N/A';
+  bool _deviceOnline = false;
+  Timer? _statusTimer;
+  String? _deviceId;
+
   @override
   void initState() {
     super.initState();
     _loadData();
+    _initDeviceStatusPolling();
+  }
+
+  @override
+  void dispose() {
+    _statusTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Start polling device status every 60 seconds
+  Future<void> _initDeviceStatusPolling() async {
+    final prefs = await SharedPreferences.getInstance();
+    _deviceId = prefs.getString('device_id') ?? 'KAVACH-001';
+
+    // Fetch immediately, then every 60s
+    _fetchDeviceStatus();
+    _statusTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _fetchDeviceStatus(),
+    );
+  }
+
+  Future<void> _fetchDeviceStatus() async {
+    if (_deviceId == null) return;
+    try {
+      final result = await ApiService.getDeviceStatus(_deviceId!);
+      if (result['status'] == 'ok' && mounted) {
+        setState(() {
+          _deviceOnline = result['online'] == true;
+          _deviceBattery = result['battery'] ?? 'N/A';
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _deviceOnline = false;
+          _deviceBattery = 'N/A';
+        });
+      }
+    }
   }
 
   Future<void> _loadData() async {
@@ -80,17 +128,18 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
     }
 
     final totalAlerts = _health?['database']?['total_alerts'] ?? _allAlerts.length;
-    final serverStatus = _health?['status'] == 'ok' ? 'Online' : 'Offline';
-    final uptime = _health?['uptime_human'] ?? 'N/A';
 
     return RefreshIndicator(
-      onRefresh: _loadData,
+      onRefresh: () async {
+        await _loadData();
+        await _fetchDeviceStatus();
+      },
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Status card
+          // Device status card — live battery + online/offline
           Card(
-            color: serverStatus == 'Online'
+            color: _deviceOnline
                 ? Colors.green.shade50
                 : Colors.red.shade50,
             child: Padding(
@@ -102,9 +151,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
                     height: 12,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: serverStatus == 'Online'
-                          ? Colors.green
-                          : Colors.red,
+                      color: _deviceOnline ? Colors.green : Colors.red,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -113,24 +160,25 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Server $serverStatus',
+                          _deviceOnline ? 'Device Online' : 'Device Offline',
                           style: theme.textTheme.titleMedium?.copyWith(
                             fontWeight: FontWeight.bold,
                           ),
                         ),
                         Text(
-                          'Uptime: $uptime',
+                          _deviceOnline
+                              ? 'Battery: $_deviceBattery'
+                              : 'No heartbeat received',
                           style: theme.textTheme.bodySmall,
                         ),
                       ],
                     ),
                   ),
                   Icon(
-                    serverStatus == 'Online'
-                        ? Icons.check_circle
-                        : Icons.error,
-                    color:
-                        serverStatus == 'Online' ? Colors.green : Colors.red,
+                    _deviceOnline
+                        ? Icons.battery_full
+                        : Icons.battery_unknown,
+                    color: _deviceOnline ? Colors.green : Colors.red,
                     size: 32,
                   ),
                 ],

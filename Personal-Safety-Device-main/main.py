@@ -38,7 +38,7 @@ EVIDENCE CAPTURE (started/stopped per alert, daemon threads):
   AudioRecorderManager — 30-second WAV clips via microphone / FakeAudioRecorder
 
 BACKGROUND SERVICES (daemon threads):
-  ConfigSync           — polls server every 60s for app-pushed config changes
+  ConfigSync           — polls server every 60s for config changes + sends battery heartbeat
   KeyboardDemo         — (desktop only) listens for f/h/a/s/d/l/q demo keys
 
 FIX applied (serial port conflict):
@@ -274,15 +274,20 @@ audio_recorder: AudioRecorderManager = None   # type: ignore — set in __main__
 # ─────────────────────────────────────────────────────────────────────────────
 CONFIG_POLL_INTERVAL = 60   # seconds between polls (1 minute)
 
-def _config_poll_loop(config: dict) -> None:
+def _config_poll_loop(config: dict, power_monitor=None) -> None:
     """
     Background thread: polls the server's /api/device/config/<device_id>
     endpoint periodically. If the server has updated phone numbers (from
     the mobile app), merges them into the local config.json.
 
+    Also sends a heartbeat with the current battery percentage via the
+    X-Battery header so the mobile app can display live device status.
+
     Only syncs phone number fields — serial_port, baud_rate, etc. are
     never overwritten by the server.
     """
+    from alerts import _read_battery
+
     device_id  = config.get('device_id', 'KAVACH-001')
     server_url = config.get('server_url', '')
 
@@ -294,7 +299,8 @@ def _config_poll_loop(config: dict) -> None:
     else:
         base_url = server_url
 
-    poll_url = f"{base_url}/api/device/config/{device_id}"
+    poll_url   = f"{base_url}/api/device/config/{device_id}"
+    device_key = config.get('device_key', '')
     logger.info("[ConfigSync] Polling %s every %ds.", poll_url, CONFIG_POLL_INTERVAL)
 
     syncable_keys = {'police_number', 'guardian_number', 'medical_number', 'whatsapp_number'}
@@ -303,7 +309,15 @@ def _config_poll_loop(config: dict) -> None:
         time.sleep(CONFIG_POLL_INTERVAL)
         try:
             import requests
-            r = requests.get(poll_url, timeout=10)
+            battery_str = _read_battery(power_monitor)
+            r = requests.get(
+                poll_url,
+                headers={
+                    'X-Device-Key': device_key,
+                    'X-Battery':    battery_str,
+                },
+                timeout=10,
+            )
             if r.status_code != 200:
                 logger.debug("[ConfigSync] Server returned %d — skipping.", r.status_code)
                 continue
@@ -660,16 +674,24 @@ if __name__ == '__main__':
     lora_manager.start(on_packet_received=_on_lora_packet)
     logger.info("[Boot] %s", lora_manager.status_string())
 
-    # ── 10. Config sync (polls server for app-pushed config changes) ─────────
+    # ── 10. Power monitor for heartbeat battery reporting ───────────────────
+    from alerts import _init_power_monitor
+    power_monitor = _init_power_monitor()
+    if power_monitor:
+        logger.info("[Boot] Power monitor initialised for heartbeat reporting.")
+    else:
+        logger.info("[Boot] No power monitor — heartbeat will report battery as N/A.")
+
+    # ── 11. Config sync (polls server for app-pushed config changes) ─────────
     threading.Thread(
         target=_config_poll_loop,
-        args=(config,),
+        args=(config, power_monitor),
         name="ConfigSync",
         daemon=True
     ).start()
     logger.info("[Boot] Config sync thread started (polling every %ds).", CONFIG_POLL_INTERVAL)
 
-    # ── 11. IMU + Heart rate monitor threads ──────────────────────────────────
+    # ── 12. IMU + Heart rate monitor threads ──────────────────────────────────
     threading.Thread(
         target=_imu_monitor,
         args=(sensor_manager,),
@@ -684,7 +706,7 @@ if __name__ == '__main__':
     ).start()
     logger.info("[Boot] Sensor monitor threads started.")
 
-    # ── 12. Keyboard demo (desktop only — skipped on Pi) ────────────────────
+    # ── 13. Keyboard demo (desktop only — skipped on Pi) ────────────────────
     try:
         import RPi.GPIO  # noqa: F401
         _on_pi = True
@@ -702,7 +724,7 @@ if __name__ == '__main__':
     else:
         logger.info("[Boot] Running on Pi — keyboard demo keys disabled (using real hardware).")
 
-    # ── 13. Ready ─────────────────────────────────────────────────────────────
+    # ── 14. Ready ─────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info(" Kavach ARMED — %s", kavach.status_line())
     logger.info(" Triggers active:")

@@ -1,22 +1,25 @@
 """
 app.py - Kavach Server
 
-Flask API with admin dashboard, mobile app auth, and device telemetry:
-  GET  /                   - admin dashboard (login required)
-  POST /api/alerts         - receive encrypted telemetry + evidence files
-  GET  /api/alerts         - list all alerts (dashboard)
-  GET  /api/alerts/<id>    - single alert detail with hash verification
-  GET  /api/health         - server + database health check
-  GET  /uploads/<file>     - serve evidence files
+Flask API with admin dashboard, mobile app auth, and device telemetry.
+All data routes are authenticated — no public access to alert data,
+evidence files, or device configuration.
+
+  GET  /                   - admin dashboard (session login required)
+  POST /api/alerts         - receive encrypted telemetry + evidence (ChaCha20 = implicit auth)
+  GET  /api/alerts         - list alerts (admin session or Bearer token)
+  GET  /api/alerts/<id>    - alert detail + hash verification (admin session or Bearer token)
+  GET  /api/health         - server + database health check (public)
+  GET  /uploads/<file>     - serve evidence files (auth or signed download token)
   POST /api/auth/signup    - create mobile app account (user/guardian)
   POST /api/auth/login     - get auth token for mobile app
-  GET  /api/user/alerts    - user's alerts (token auth)
-  GET  /api/guardian/alerts - guardian's alerts (token auth)
-  GET  /api/user/locations - location history (token auth)
-  GET  /api/user/config    - get device phone numbers (token auth)
-  PUT  /api/user/config    - update phone numbers from app (token auth)
-  GET  /api/device/config/<device_id> - Pi polls this for config updates
-  GET  /api/guardian/evidence/<id> - evidence files (token auth)
+  GET  /api/user/alerts    - user's alerts (Bearer token, user role)
+  GET  /api/guardian/alerts - guardian's alerts (Bearer token, guardian role)
+  GET  /api/user/locations - location history (Bearer token, user role)
+  GET  /api/user/config    - get device phone numbers (Bearer token, user role)
+  PUT  /api/user/config    - update phone numbers from app (Bearer token, user role)
+  GET  /api/device/config/<device_id> - Pi polls this (X-Device-Key header)
+  GET  /api/guardian/evidence/<id> - evidence files (Bearer token, guardian role)
 """
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, session, redirect, url_for
@@ -67,6 +70,33 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 CONFIG_DIR = os.path.join(_APP_DIR, 'device_configs')
 os.makedirs(CONFIG_DIR, exist_ok=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# In-memory device status — updated every time the Pi polls /api/device/config
+# ─────────────────────────────────────────────────────────────────────────────
+_device_status = {}   # { device_id: { "battery": "85%", "last_seen": datetime } }
+_DEVICE_ONLINE_TIMEOUT = 120   # seconds — device is "offline" if not seen in 2 min
+
+
+def _update_device_status(device_id: str, battery: str):
+    """Record the latest heartbeat from a device."""
+    _device_status[device_id] = {
+        'battery':   battery,
+        'last_seen': datetime.datetime.now(_UTC),
+    }
+
+
+def _get_device_status(device_id: str) -> dict:
+    """Return device battery and online/offline status."""
+    info = _device_status.get(device_id)
+    if not info:
+        return {'battery': None, 'online': False, 'last_seen': None}
+    elapsed = (datetime.datetime.now(_UTC) - info['last_seen']).total_seconds()
+    return {
+        'battery':   info['battery'],
+        'online':    elapsed <= _DEVICE_ONLINE_TIMEOUT,
+        'last_seen': info['last_seen'].isoformat(),
+    }
 
 
 def _load_device_config(device_id: str) -> dict:
@@ -126,6 +156,12 @@ ADMIN_USERNAME = os.environ.get('KAVACH_ADMIN_USER', 'admin')
 ADMIN_PASSWORD = os.environ.get('KAVACH_ADMIN_PASS', 'kavach2026')
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Device API key — the Raspberry Pi sends this in the X-Device-Key header
+# when polling /api/device/config.  Override via env var for production.
+# ─────────────────────────────────────────────────────────────────────────────
+KAVACH_DEVICE_KEY = os.environ.get('KAVACH_DEVICE_KEY', 'kavach-device-key-2026')
+
+# ─────────────────────────────────────────────────────────────────────────────
 # App user accounts (stored in app_users.json)
 # ─────────────────────────────────────────────────────────────────────────────
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -176,6 +212,51 @@ def admin_required(f):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Auth helpers — used by API routes that need flexible authentication
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_any_auth() -> bool:
+    """
+    Return True if the request carries valid authentication:
+      1. Admin session cookie (from dashboard login), OR
+      2. Valid Bearer token (from mobile app login).
+    """
+    if session.get('admin_logged_in'):
+        return True
+    try:
+        _verify_token(request)
+        return True
+    except (ValueError, Exception):
+        return False
+
+
+def _check_device_key() -> bool:
+    """Return True if the X-Device-Key header matches KAVACH_DEVICE_KEY."""
+    return request.headers.get('X-Device-Key') == KAVACH_DEVICE_KEY
+
+
+def _create_download_token(filename: str) -> str:
+    """
+    Create a short-lived signed token for downloading a specific evidence file.
+    Used because the Flutter app opens files in an external browser which
+    cannot send Authorization headers — so we embed auth in the URL.
+    """
+    return _token_serializer.dumps({'filename': filename, 'type': 'download'})
+
+
+def _verify_download_token(filename: str) -> bool:
+    """Verify a signed download token from the ?token= query parameter."""
+    token = request.args.get('token', '')
+    if not token:
+        return False
+    try:
+        data = _token_serializer.loads(token, max_age=3600)  # 1-hour expiry
+        return data.get('filename') == filename and data.get('type') == 'download'
+    except (SignatureExpired, BadSignature, KeyError):
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -469,9 +550,34 @@ def update_user_config():
 
 @app.route('/api/device/config/<device_id>', methods=['GET'])
 def get_device_config(device_id: str):
-    """Pi polls this endpoint to get latest config from the app."""
+    """Pi polls this endpoint every 60s to get latest config.
+    Also serves as a heartbeat — captures X-Battery header for live status.
+    Requires X-Device-Key header to prevent unauthenticated access."""
+    if not _check_device_key():
+        return jsonify({'status': 'error', 'message': 'Invalid or missing device key'}), 401
+
+    # Capture device heartbeat (battery status)
+    battery = request.headers.get('X-Battery', '')
+    if battery:
+        _update_device_status(device_id, battery)
+        logger.debug("[Config] Heartbeat from %s — battery: %s", device_id, battery)
+
     config = _load_device_config(device_id)
     return jsonify({'status': 'ok', 'config': config}), 200
+
+
+@app.route('/api/device/status/<device_id>', methods=['GET'])
+def get_device_status(device_id: str):
+    """
+    Returns the live battery percentage and online/offline status for a device.
+    The Pi reports battery every 60s via the config poll heartbeat.
+    If no heartbeat received within 2 minutes, the device is considered offline.
+    Requires admin session or Bearer token.
+    """
+    if not _check_any_auth():
+        return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
+    info = _get_device_status(device_id)
+    return jsonify({'status': 'ok', **info}), 200
 
 
 @app.route('/api/guardian/evidence/<int:alert_id>', methods=['GET'])
@@ -497,9 +603,10 @@ def guardian_evidence(alert_id: int):
                 if not fname:
                     continue
                 fpath = os.path.join(UPLOAD_DIR, fname)
+                dl_token = _create_download_token(fname)
                 evidence.append({
                     'filename':        fname,
-                    'url':             f'/uploads/{fname}',
+                    'url':             f'/uploads/{fname}?token={dl_token}',
                     'file_exists':     os.path.exists(fpath),
                     'file_size_bytes': os.path.getsize(fpath) if os.path.exists(fpath) else 0,
                 })
@@ -735,6 +842,8 @@ def _format_uptime(seconds: int) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/api/alerts', methods=['GET'])
 def list_alerts():
+    if not _check_any_auth():
+        return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
     try:
         device_id = request.args.get('device_id')
         raw_limit = request.args.get('limit', '50')
@@ -768,6 +877,8 @@ def list_alerts():
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/api/alerts/<int:alert_id>', methods=['GET'])
 def get_alert(alert_id: int):
+    if not _check_any_auth():
+        return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
     try:
         # db.session.get() is the correct SQLAlchemy 2.x API
         alert = DB.session.get(Alert, alert_id)
@@ -804,7 +915,8 @@ def get_alert(alert_id: int):
                 stored_hash  = stored_hashes.get(fname)
                 verified     = (current_hash == stored_hash) if stored_hash else None
                 file_size    = os.path.getsize(fpath)
-                public_url   = f"/uploads/{fname}"
+                dl_token     = _create_download_token(fname)
+                public_url   = f"/uploads/{fname}?token={dl_token}"
 
                 evidence_verification.append({
                     'filename':        fname,
@@ -852,6 +964,13 @@ def _alert_to_dict(alert: Alert) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
+    """Serve evidence files. Requires one of:
+      1. Admin session (dashboard), OR
+      2. Valid Bearer token (mobile app), OR
+      3. Signed ?token= query parameter (time-limited download link).
+    """
+    if not (_check_any_auth() or _verify_download_token(filename)):
+        return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
     return send_from_directory(UPLOAD_DIR, filename)
 
 
