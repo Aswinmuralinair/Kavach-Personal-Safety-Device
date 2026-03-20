@@ -53,13 +53,10 @@
             z-index: 9999;
             transition: opacity 0.8s ease, visibility 0.8s ease;
         }
-        .splash-overlay.hidden {
-            opacity: 0; visibility: hidden;
-        }
+        .splash-overlay.hidden { opacity: 0; visibility: hidden; }
         .splash-logo {
             width: 140px; height: 140px;
-            border-radius: 28px;
-            object-fit: cover;
+            border-radius: 28px; object-fit: cover;
             animation: splashPulse 2s ease-in-out infinite;
             box-shadow: 0 0 60px rgba(0,188,212,0.3);
         }
@@ -68,89 +65,49 @@
             50% { transform: scale(1.05); box-shadow: 0 0 80px rgba(0,188,212,0.5); }
         }
         .splash-title {
-            font-size: 42px; font-weight: 800;
-            color: #fff; margin-top: 24px;
-            letter-spacing: 8px;
-            text-transform: uppercase;
+            font-size: 42px; font-weight: 800; color: #fff; margin-top: 24px;
+            letter-spacing: 8px; text-transform: uppercase;
         }
         .splash-caption {
             font-size: 15px; color: var(--text-secondary);
             margin-top: 12px; letter-spacing: 1px;
-            opacity: 0;
-            animation: fadeIn 1s ease 0.5s forwards;
+            opacity: 0; animation: fadeIn 1s ease 0.5s forwards;
         }
         @keyframes fadeIn { to { opacity: 1; } }
         .splash-line {
             width: 60px; height: 2px;
             background: linear-gradient(90deg, transparent, var(--accent), transparent);
-            margin-top: 20px;
-            animation: fadeIn 1s ease 0.8s forwards;
-            opacity: 0;
+            margin-top: 20px; animation: fadeIn 1s ease 0.8s forwards; opacity: 0;
         }
 
         /* ── Header ─────────────────────────────────────── */
         .header {
-            background: var(--bg-white);
-            border-bottom: 1px solid var(--border);
-            padding: 0 32px;
-            height: 60px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: var(--shadow-sm);
+            background: var(--bg-white); border-bottom: 1px solid var(--border);
+            padding: 0 32px; height: 60px;
+            display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow-sm);
         }
         .header-left { display: flex; align-items: center; gap: 14px; }
-        .logo-mark {
-            width: 36px; height: 36px;
-            border-radius: 10px;
-            overflow: hidden;
-        }
+        .logo-mark { width: 36px; height: 36px; border-radius: 10px; overflow: hidden; }
         .logo-mark img { width: 100%; height: 100%; object-fit: cover; }
-        .header h1 {
-            font-size: 18px;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
+        .header h1 { font-size: 18px; font-weight: 700; color: var(--text-primary); }
         .header-badge {
-            background: var(--accent-light);
-            color: var(--accent);
-            padding: 3px 10px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-weight: 600;
+            background: var(--accent-light); color: var(--accent);
+            padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 600;
         }
         .header-right { display: flex; align-items: center; gap: 16px; }
-        .refresh-info {
-            display: flex; align-items: center; gap: 6px;
-            font-size: 12px; color: var(--text-muted);
-        }
+        .refresh-info { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
         .pulse-dot {
-            width: 7px; height: 7px;
-            background: var(--success);
-            border-radius: 50%;
-            animation: pulse 2s infinite;
+            width: 7px; height: 7px; background: var(--success);
+            border-radius: 50%; animation: pulse 2s infinite;
         }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-
         .logout-btn {
-            padding: 6px 14px;
-            background: var(--bg-page);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            font-size: 13px;
-            color: var(--text-secondary);
-            cursor: pointer;
-            text-decoration: none;
-            transition: all 0.15s;
+            padding: 6px 14px; background: var(--bg-page); border: 1px solid var(--border);
+            border-radius: 8px; font-size: 13px; color: var(--text-secondary);
+            cursor: pointer; text-decoration: none; transition: all 0.15s;
         }
-        .logout-btn:hover {
-            background: var(--danger-light);
-            color: var(--danger);
-            border-color: var(--danger-border);
-        }
+        .logout-btn:hover { background: var(--danger-light); color: var(--danger); border-color: var(--danger-border); }
 
         /* ── Container ──────────────────────────────────── */
         .container { max-width: 1400px; margin: 0 auto; padding: 24px 32px; }
@@ -159,17 +116,10 @@
         .stats-bar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 24px; }
         @media (max-width: 900px) { .stats-bar { grid-template-columns: repeat(2, 1fr); } }
         .stat-card {
-            background: var(--bg-white);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 18px 22px;
-            box-shadow: var(--shadow-sm);
+            background: var(--bg-white); border: 1px solid var(--border);
+            border-radius: var(--radius); padding: 18px 22px; box-shadow: var(--shadow-sm);
         }
-        .stat-card .label {
-            font-size: 12px; color: var(--text-muted);
-            text-transform: uppercase; letter-spacing: 0.5px;
-            margin-bottom: 6px; font-weight: 500;
-        }
+        .stat-card .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; font-weight: 500; }
         .stat-card .value { font-size: 28px; font-weight: 700; }
         .stat-card .value.total { color: var(--accent); }
         .stat-card .value.sos { color: var(--danger); }
@@ -183,15 +133,11 @@
 
         /* ── Panel / Card ───────────────────────────────── */
         .panel {
-            background: var(--bg-white);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            overflow: hidden;
-            box-shadow: var(--shadow-sm);
+            background: var(--bg-white); border: 1px solid var(--border);
+            border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow-sm);
         }
         .panel-header {
-            padding: 14px 20px;
-            border-bottom: 1px solid var(--border-light);
+            padding: 14px 20px; border-bottom: 1px solid var(--border-light);
             font-size: 14px; font-weight: 600;
             display: flex; justify-content: space-between; align-items: center;
             color: var(--text-primary);
@@ -208,105 +154,118 @@
         .device-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
         .device-card {
-            background: var(--bg-page);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 16px;
-            margin-bottom: 10px;
-            cursor: pointer;
-            transition: all 0.2s;
+            background: var(--bg-page); border: 1px solid var(--border);
+            border-radius: 10px; padding: 16px; margin-bottom: 10px;
+            cursor: pointer; transition: all 0.2s;
         }
-        .device-card:hover {
-            border-color: var(--accent);
-            box-shadow: var(--glow);
-        }
+        .device-card:hover { border-color: var(--accent); box-shadow: var(--glow); }
         .device-card.expanded .device-alerts { display: block; }
-        .device-header {
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        .device-name {
-            font-weight: 700; font-size: 14px; color: var(--accent);
-        }
-        .device-meta {
-            display: flex; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-secondary);
-        }
+        .device-header { display: flex; justify-content: space-between; align-items: center; }
+        .device-name { font-weight: 700; font-size: 14px; color: var(--accent); }
+        .device-meta { display: flex; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
         .device-meta span { display: flex; align-items: center; gap: 4px; }
         .device-status {
             display: inline-flex; align-items: center; gap: 5px;
-            font-size: 11px; font-weight: 600;
-            padding: 3px 10px; border-radius: 20px;
+            font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
         }
         .device-status.online { background: var(--success-light); color: var(--success); }
         .device-status.offline { background: rgba(107,114,128,0.15); color: var(--text-muted); }
 
         .device-alerts {
-            display: none;
-            margin-top: 12px;
-            border-top: 1px solid var(--border);
-            padding-top: 10px;
+            display: none; margin-top: 12px;
+            border-top: 1px solid var(--border); padding-top: 10px;
         }
         .device-alert-row {
             display: flex; justify-content: space-between; align-items: center;
-            padding: 6px 0;
-            font-size: 12px;
-            color: var(--text-secondary);
+            padding: 8px 6px; font-size: 12px; color: var(--text-secondary);
             border-bottom: 1px solid var(--border-light);
+            cursor: pointer; border-radius: 6px; transition: background 0.15s;
         }
+        .device-alert-row:hover { background: var(--bg-hover); }
         .device-alert-row:last-child { border-bottom: none; }
 
+        /* ── Alert Detail Panel (inline expand) ─────────── */
+        .alert-detail {
+            display: none; margin-top: 8px;
+            background: var(--bg-white); border: 1px solid var(--border);
+            border-radius: 8px; padding: 14px; animation: slideDown 0.2s ease;
+        }
+        .alert-detail.open { display: block; }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+
+        .alert-detail-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+            font-size: 12px; margin-bottom: 10px;
+        }
+        .alert-detail-grid .item { display: flex; flex-direction: column; gap: 2px; }
+        .alert-detail-grid .item .lbl { color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; }
+        .alert-detail-grid .item .val { color: var(--text-primary); font-weight: 500; }
+
+        .evidence-list { margin-top: 8px; }
+        .evidence-list-title {
+            font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px;
+            color: var(--text-muted); margin-bottom: 6px; font-weight: 600;
+        }
+        .evidence-file {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 10px; background: var(--bg-page);
+            border: 1px solid var(--border); border-radius: 6px;
+            margin-bottom: 4px; transition: border-color 0.15s;
+        }
+        .evidence-file:hover { border-color: var(--accent); }
+        .evidence-file-info { display: flex; align-items: center; gap: 8px; }
+        .evidence-file-icon { font-size: 18px; }
+        .evidence-file-name {
+            font-size: 11px; font-weight: 500; color: var(--text-primary);
+            max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .evidence-file-size { font-size: 10px; color: var(--text-muted); }
+        .evidence-file-actions { display: flex; gap: 6px; }
+        .evidence-file-actions a {
+            padding: 4px 10px; border-radius: 4px;
+            font-size: 10px; font-weight: 600; text-decoration: none;
+            transition: all 0.15s;
+        }
+        .btn-play {
+            background: var(--accent-light); color: var(--accent);
+            border: 1px solid rgba(0,188,212,0.3);
+        }
+        .btn-play:hover { background: var(--accent); color: #fff; }
+        .btn-download {
+            background: rgba(107,114,128,0.1); color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+        .btn-download:hover { background: var(--bg-hover); color: var(--text-primary); }
+
         /* ── Table ──────────────────────────────────────── */
-        .table-scroll { max-height: 420px; overflow-y: auto; }
+        .table-scroll { max-height: 500px; overflow-y: auto; }
         .table-scroll::-webkit-scrollbar { width: 5px; }
         .table-scroll::-webkit-scrollbar-track { background: transparent; }
         .table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         thead th {
-            position: sticky; top: 0;
-            background: var(--bg-page);
-            padding: 10px 14px;
-            text-align: left;
+            position: sticky; top: 0; background: var(--bg-page);
+            padding: 10px 14px; text-align: left;
             font-weight: 600; font-size: 11px;
             text-transform: uppercase; letter-spacing: 0.4px;
-            color: var(--text-secondary);
-            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary); border-bottom: 1px solid var(--border);
         }
         tbody td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-light);
-            color: var(--text-primary);
-            white-space: nowrap;
+            padding: 10px 14px; border-bottom: 1px solid var(--border-light);
+            color: var(--text-primary); white-space: nowrap;
         }
         tbody tr:hover { background: var(--bg-hover); }
 
         /* ── Badges ─────────────────────────────────────── */
-        .badge {
-            display: inline-block; padding: 3px 10px;
-            border-radius: 6px; font-size: 11px; font-weight: 600;
-        }
-        .badge-sos {
-            background: var(--danger-light); color: var(--danger);
-            border: 1px solid var(--danger-border);
-        }
-        .badge-medical {
-            background: var(--medical-light); color: var(--medical);
-            border: 1px solid var(--medical-border);
-        }
-        .badge-safe {
-            background: var(--success-light); color: var(--success);
-            border: 1px solid var(--success-border);
-        }
-        .badge-trigger {
-            background: rgba(0,188,212,0.1); color: var(--accent);
-            border: 1px solid rgba(0,188,212,0.3);
-            font-size: 10px; padding: 2px 8px;
-        }
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; }
+        .badge-sos { background: var(--danger-light); color: var(--danger); border: 1px solid var(--danger-border); }
+        .badge-medical { background: var(--medical-light); color: var(--medical); border: 1px solid var(--medical-border); }
+        .badge-safe { background: var(--success-light); color: var(--success); border: 1px solid var(--success-border); }
+        .badge-trigger { background: rgba(0,188,212,0.1); color: var(--accent); border: 1px solid rgba(0,188,212,0.3); font-size: 10px; padding: 2px 8px; }
 
         /* ── Status dots ────────────────────────────────── */
-        .status-dot {
-            display: inline-block; width: 7px; height: 7px;
-            border-radius: 50%; margin-right: 5px;
-        }
+        .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
         .status-dot.on { background: var(--success); }
         .status-dot.off { background: var(--border); }
 
@@ -314,86 +273,9 @@
         .link { color: var(--accent); text-decoration: none; font-size: 12px; }
         .link:hover { text-decoration: underline; }
 
-        /* ── Evidence Section ───────────────────────────── */
-        .evidence-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 14px;
-            padding: 20px;
-        }
-        .evidence-card {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            overflow: hidden;
-            transition: box-shadow 0.15s;
-            background: var(--bg-page);
-        }
-        .evidence-card:hover { box-shadow: var(--shadow-md); }
-
-        .evidence-preview {
-            height: 120px;
-            background: #0a0c10;
-            display: flex; align-items: center; justify-content: center;
-            position: relative;
-        }
-        .evidence-preview img {
-            width: 100%; height: 100%; object-fit: cover;
-        }
-        .evidence-preview .file-icon {
-            font-size: 32px; color: var(--text-muted);
-        }
-        .evidence-preview .file-type-tag {
-            position: absolute; top: 8px; right: 8px;
-            background: rgba(0,0,0,0.7); color: #fff;
-            padding: 2px 8px; border-radius: 4px;
-            font-size: 10px; font-weight: 600; text-transform: uppercase;
-        }
-        .evidence-info { padding: 10px 12px; }
-        .evidence-info .name {
-            font-size: 12px; font-weight: 600; color: var(--text-primary);
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .evidence-info .meta {
-            font-size: 11px; color: var(--text-muted); margin-top: 3px;
-        }
-        .evidence-info .alert-ref { font-size: 11px; margin-top: 4px; }
-        .evidence-download {
-            display: block; text-align: center;
-            padding: 8px; border-top: 1px solid var(--border-light);
-            color: var(--accent); font-size: 12px; font-weight: 600;
-            text-decoration: none; transition: background 0.15s;
-        }
-        .evidence-download:hover { background: var(--accent-light); }
-
-        .evidence-filter { display: flex; gap: 8px; flex-wrap: wrap; }
-        .filter-btn {
-            padding: 5px 14px; border-radius: 20px;
-            border: 1px solid var(--border); background: var(--bg-white);
-            font-size: 12px; color: var(--text-secondary);
-            cursor: pointer; transition: all 0.15s;
-        }
-        .filter-btn:hover, .filter-btn.active {
-            background: var(--accent); color: #fff; border-color: var(--accent);
-        }
-
         /* ── Empty state ────────────────────────────────── */
-        .empty-state {
-            text-align: center; padding: 50px 20px; color: var(--text-muted);
-        }
+        .empty-state { text-align: center; padding: 50px 20px; color: var(--text-muted); }
         .empty-state .icon { font-size: 36px; margin-bottom: 10px; opacity: 0.5; }
-
-        /* ── Tabs ───────────────────────────────────────── */
-        .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); }
-        .tab {
-            padding: 12px 24px; font-size: 13px; font-weight: 600;
-            color: var(--text-muted); cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.15s;
-        }
-        .tab:hover { color: var(--text-secondary); }
-        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
     </style>
 </head>
 <body>
@@ -431,26 +313,11 @@
 
         <!-- Stats -->
         <div class="stats-bar">
-            <div class="stat-card">
-                <div class="label">Total Alerts</div>
-                <div class="value total" id="statTotal">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">SOS Alerts</div>
-                <div class="value sos" id="statSOS">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Medical</div>
-                <div class="value medical" id="statMedical">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Devices</div>
-                <div class="value devices" id="statDevices">-</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">Evidence Files</div>
-                <div class="value files" id="statFiles">-</div>
-            </div>
+            <div class="stat-card"><div class="label">Total Alerts</div><div class="value total" id="statTotal">-</div></div>
+            <div class="stat-card"><div class="label">SOS Alerts</div><div class="value sos" id="statSOS">-</div></div>
+            <div class="stat-card"><div class="label">Medical</div><div class="value medical" id="statMedical">-</div></div>
+            <div class="stat-card"><div class="label">Devices</div><div class="value devices" id="statDevices">-</div></div>
+            <div class="stat-card"><div class="label">Evidence Files</div><div class="value files" id="statFiles">-</div></div>
         </div>
 
         <!-- Map + Active Devices -->
@@ -476,39 +343,16 @@
             </div>
         </div>
 
-        <!-- Tabbed Section: All Alerts / Evidence -->
+        <!-- All Alerts Table -->
         <div class="panel">
-            <div class="tabs">
-                <div class="tab active" data-tab="alerts-tab">All Alerts</div>
-                <div class="tab" data-tab="evidence-tab">Evidence Files</div>
+            <div class="panel-header">
+                <span>All Alerts</span>
+                <span class="sub" id="alertTableCount"></span>
             </div>
-
-            <!-- All Alerts Tab -->
-            <div class="tab-content active" id="alerts-tab">
-                <div class="table-scroll" id="allTable" style="max-height: 500px;">
-                    <div class="empty-state">
-                        <div class="icon">&#128202;</div>
-                        <div>Loading...</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Evidence Tab -->
-            <div class="tab-content" id="evidence-tab">
-                <div style="padding: 16px 20px 0; display: flex; justify-content: space-between; align-items: center;">
-                    <div class="evidence-filter" id="evidenceFilter">
-                        <button class="filter-btn active" data-filter="all">All</button>
-                        <button class="filter-btn" data-filter="image">Images</button>
-                        <button class="filter-btn" data-filter="video">Videos</button>
-                        <button class="filter-btn" data-filter="audio">Audio</button>
-                    </div>
-                    <span class="sub" id="evidenceCount" style="font-size:12px; color: var(--text-muted);"></span>
-                </div>
-                <div class="evidence-grid" id="evidenceGrid">
-                    <div class="empty-state" style="grid-column: 1/-1;">
-                        <div class="icon">&#128193;</div>
-                        <div>No evidence files yet</div>
-                    </div>
+            <div class="table-scroll" id="allTable">
+                <div class="empty-state">
+                    <div class="icon">&#128202;</div>
+                    <div>Loading...</div>
                 </div>
             </div>
         </div>
@@ -520,28 +364,6 @@
     setTimeout(() => {
         document.getElementById('splashOverlay').classList.add('hidden');
     }, 2500);
-
-    // ── Tabs ──────────────────────────────────────────────
-    document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            tab.classList.add('active');
-            document.getElementById(tab.dataset.tab).classList.add('active');
-        });
-    });
-
-    // ── Evidence Filter ──────────────────────────────────
-    document.getElementById('evidenceFilter').addEventListener('click', e => {
-        if (!e.target.classList.contains('filter-btn')) return;
-        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-        e.target.classList.add('active');
-        const filter = e.target.dataset.filter;
-        document.querySelectorAll('.evidence-card').forEach(card => {
-            if (filter === 'all') { card.style.display = ''; return; }
-            card.style.display = card.dataset.type === filter ? '' : 'none';
-        });
-    });
 
     // ── Map ──────────────────────────────────────────────
     const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([20.5937, 78.9629], 5);
@@ -558,23 +380,20 @@
     const medicalIcon = makeIcon('#a855f7');
     const defaultIcon = makeIcon('#00bcd4');
 
+    // ── Store alerts globally for detail lookups ─────────
+    let allAlerts = [];
+
     // ── Helpers ──────────────────────────────────────────
     function formatTime(iso) {
         if (!iso) return '-';
         const d = new Date(iso);
-        return d.toLocaleString('en-IN', {
-            day: '2-digit', month: 'short', year: 'numeric',
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
+        return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
     }
 
     function shortTime(iso) {
         if (!iso) return '-';
         const d = new Date(iso);
-        return d.toLocaleString('en-IN', {
-            day: '2-digit', month: 'short',
-            hour: '2-digit', minute: '2-digit', hour12: true
-        });
+        return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: true });
     }
 
     function esc(s) {
@@ -594,16 +413,12 @@
 
     function triggerBadge(src) {
         if (!src) return '<span style="color:var(--text-muted)">-</span>';
-        // Make trigger display friendly
-        const map = {
-            'keyboard_demo': 'Manual Test',
-            'button': 'SOS Button',
-            'fall_detection': 'Fall Detected',
-            'heart_rate': 'Heart Rate Spike',
-            'audio_detection': 'Danger Sound',
-            'lora_relay': 'LoRa Mesh Relay'
+        const labels = {
+            'keyboard_demo': 'Manual Test', 'button': 'SOS Button',
+            'fall_detection': 'Fall Detected', 'heart_rate': 'Heart Rate Spike',
+            'audio_detection': 'Danger Sound', 'lora_relay': 'LoRa Mesh Relay'
         };
-        const label = map[src] || src.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        const label = labels[src] || src.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
         return `<span class="badge badge-trigger">${esc(label)}</span>`;
     }
 
@@ -637,24 +452,79 @@
     }
 
     function getFileIcon(type) {
-        if (type === 'image') return '&#128247;';
         if (type === 'video') return '&#127909;';
         if (type === 'audio') return '&#127911;';
+        if (type === 'image') return '&#128247;';
         return '&#128196;';
     }
 
-    function evidenceLinks(files) {
-        if (!files) return '-';
-        return files.split(',').filter(f => f.trim()).map(f => {
-            const name = f.trim();
-            const short = name.length > 22 ? name.substring(0, 22) + '...' : name;
-            return `<a href="/uploads/${name}" target="_blank" class="link">${short}</a>`;
-        }).join('<br>');
+    function formatFileSize(bytes) {
+        if (!bytes || bytes <= 0) return '';
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
+        return (bytes/(1024*1024)).toFixed(1) + ' MB';
+    }
+
+    // ── Toggle alert detail inside device card ───────────
+    function toggleAlertDetail(alertId, el) {
+        event.stopPropagation(); // don't toggle device card
+        const existing = el.querySelector('.alert-detail');
+        if (existing) {
+            existing.classList.toggle('open');
+            return;
+        }
+
+        const a = allAlerts.find(x => x.id === alertId);
+        if (!a) return;
+
+        // Build evidence files list
+        let evidenceHtml = '';
+        if (a.uploaded_files) {
+            const files = a.uploaded_files.split(',').filter(f => f.trim());
+            if (files.length) {
+                evidenceHtml = `<div class="evidence-list">
+                    <div class="evidence-list-title">&#128274; Evidence Files (${files.length})</div>
+                    ${files.map(fname => {
+                        const name = fname.trim();
+                        const type = getFileType(name);
+                        const icon = getFileIcon(type);
+                        return `<div class="evidence-file">
+                            <div class="evidence-file-info">
+                                <span class="evidence-file-icon">${icon}</span>
+                                <div>
+                                    <div class="evidence-file-name" title="${esc(name)}">${esc(name)}</div>
+                                    <div class="evidence-file-size">${type.toUpperCase()}</div>
+                                </div>
+                            </div>
+                            <div class="evidence-file-actions">
+                                <a href="/uploads/${esc(name)}" target="_blank" class="btn-play">&#9654; Open</a>
+                                <a href="/uploads/${esc(name)}" download class="btn-download">&#8615; Save</a>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                </div>`;
+            }
+        }
+
+        const detailHtml = `<div class="alert-detail open">
+            <div class="alert-detail-grid">
+                <div class="item"><span class="lbl">Alert ID</span><span class="val">#${esc(a.id)}</span></div>
+                <div class="item"><span class="lbl">Time</span><span class="val">${formatTime(a.timestamp)}</span></div>
+                <div class="item"><span class="lbl">Type</span><span class="val">${typeBadge(a.alert_type)}</span></div>
+                <div class="item"><span class="lbl">Source</span><span class="val">${triggerBadge(a.trigger_source)}</span></div>
+                <div class="item"><span class="lbl">GPS</span><span class="val">${gpsLink(a.gps_location)}</span></div>
+                <div class="item"><span class="lbl">Battery</span><span class="val">${a.battery_percentage != null ? esc(a.battery_percentage) : 'N/A'}</span></div>
+                <div class="item"><span class="lbl">Call Placed</span><span class="val">${statusDot(a.call_placed_status)}</span></div>
+                <div class="item"><span class="lbl">SMS Sent</span><span class="val">${statusDot(a.guardian_sms_status)}</span></div>
+            </div>
+            ${evidenceHtml || '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:8px;">No evidence files</div>'}
+        </div>`;
+
+        el.insertAdjacentHTML('beforeend', detailHtml);
     }
 
     // ── Build Device Cards ────────────────────────────────
     function buildDeviceCards(alerts) {
-        // Group alerts by device_id
         const devices = {};
         for (const a of alerts) {
             const did = a.device_id || 'Unknown';
@@ -672,11 +542,11 @@
         let html = '';
         for (const did of deviceIds) {
             const devAlerts = devices[did];
-            const latest = devAlerts[0]; // alerts are sorted newest-first
+            const latest = devAlerts[0];
             const sosCount = devAlerts.filter(a => a.alert_type === 'SOS').length;
             const medCount = devAlerts.filter(a => a.alert_type === 'MEDICAL').length;
-            const lastGps = devAlerts.find(a => a.gps_location)?.gps_location;
             const lastBattery = devAlerts.find(a => a.battery_percentage != null)?.battery_percentage;
+            const fileCount = devAlerts.reduce((s, a) => s + (a.uploaded_files ? a.uploaded_files.split(',').filter(f=>f.trim()).length : 0), 0);
 
             html += `<div class="device-card" onclick="this.classList.toggle('expanded')">
                 <div class="device-header">
@@ -690,16 +560,18 @@
                     <span>${typeBadge('SOS')} ${sosCount}</span>
                     <span>${typeBadge('MEDICAL')} ${medCount}</span>
                     <span>&#128267; ${lastBattery != null ? esc(lastBattery) : 'N/A'}</span>
+                    <span>&#128193; ${fileCount} files</span>
                     <span>Last: ${shortTime(latest.timestamp)}</span>
                 </div>
                 <div class="device-alerts">
-                    ${devAlerts.slice(0, 8).map(a => `
-                        <div class="device-alert-row">
-                            <span>${typeBadge(a.alert_type)} ${triggerBadge(a.trigger_source)}</span>
-                            <span>${shortTime(a.timestamp)}</span>
+                    ${devAlerts.map(a => `
+                        <div class="device-alert-row" onclick="toggleAlertDetail(${a.id}, this)">
+                            <span>${typeBadge(a.alert_type)} ${triggerBadge(a.trigger_source)}
+                                ${a.uploaded_files ? '<span style="font-size:10px;color:var(--warning);">&#128193; ' + a.uploaded_files.split(',').filter(f=>f.trim()).length + '</span>' : ''}
+                            </span>
+                            <span>${shortTime(a.timestamp)} <span style="font-size:10px;color:var(--text-muted);margin-left:4px;">&#9660;</span></span>
                         </div>
                     `).join('')}
-                    ${devAlerts.length > 8 ? `<div style="text-align:center;padding:6px;font-size:11px;color:var(--text-muted);">+ ${devAlerts.length - 8} more alerts</div>` : ''}
                 </div>
             </div>`;
         }
@@ -709,11 +581,13 @@
     // ── Build Full Table ──────────────────────────────────
     function buildFullTable(alerts) {
         if (!alerts.length) return `<div class="empty-state"><div class="icon">&#128202;</div><div>No alerts in database</div></div>`;
+        document.getElementById('alertTableCount').textContent = alerts.length + ' alerts';
         let html = `<table><thead><tr>
             <th>ID</th><th>Time</th><th>Device</th><th>Type</th><th>Source</th>
-            <th>Location</th><th>Battery</th><th>Call</th><th>SMS</th><th>Evidence</th>
+            <th>Location</th><th>Battery</th><th>Call</th><th>SMS</th><th>Files</th>
         </tr></thead><tbody>`;
         for (const a of alerts) {
+            const fc = a.uploaded_files ? a.uploaded_files.split(',').filter(f=>f.trim()).length : 0;
             html += `<tr>
                 <td>#${esc(a.id)}</td>
                 <td>${formatTime(a.timestamp)}</td>
@@ -724,53 +598,10 @@
                 <td>${a.battery_percentage != null ? esc(a.battery_percentage) : '-'}</td>
                 <td>${statusDot(a.call_placed_status)}</td>
                 <td>${statusDot(a.guardian_sms_status)}</td>
-                <td>${evidenceLinks(a.uploaded_files)}</td>
+                <td>${fc > 0 ? '<span style="color:var(--warning);">&#128193; ' + fc + '</span>' : '-'}</td>
             </tr>`;
         }
         return html + '</tbody></table>';
-    }
-
-    // ── Build Evidence Grid ──────────────────────────────
-    function buildEvidenceGrid(alerts) {
-        const allFiles = [];
-        for (const a of alerts) {
-            if (!a.uploaded_files) continue;
-            for (const fname of a.uploaded_files.split(',')) {
-                const name = fname.trim();
-                if (!name) continue;
-                allFiles.push({ name, alert: a });
-            }
-        }
-
-        if (!allFiles.length) {
-            return `<div class="empty-state" style="grid-column:1/-1"><div class="icon">&#128193;</div><div>No evidence files uploaded yet</div></div>`;
-        }
-
-        document.getElementById('evidenceCount').textContent = allFiles.length + ' files';
-
-        let html = '';
-        for (const f of allFiles) {
-            const type = getFileType(f.name);
-            const ext = f.name.split('.').pop().toUpperCase();
-            const isImage = type === 'image';
-
-            html += `<div class="evidence-card" data-type="${type}">
-                <div class="evidence-preview">
-                    ${isImage
-                        ? `<img src="/uploads/${f.name}" alt="${f.name}" loading="lazy">`
-                        : `<span class="file-icon">${getFileIcon(type)}</span>`
-                    }
-                    <span class="file-type-tag">${ext}</span>
-                </div>
-                <div class="evidence-info">
-                    <div class="name" title="${esc(f.name)}">${esc(f.name)}</div>
-                    <div class="meta">Alert #${esc(f.alert.id)} &middot; ${esc(f.alert.alert_type) || 'N/A'}</div>
-                    <div class="alert-ref">${typeBadge(f.alert.alert_type)} ${formatTime(f.alert.timestamp)}</div>
-                </div>
-                <a href="/uploads/${f.name}" target="_blank" class="evidence-download">View / Download</a>
-            </div>`;
-        }
-        return html;
     }
 
     // ── Fetch & Render ───────────────────────────────────
@@ -781,30 +612,27 @@
             const data = await res.json();
             if (data.status !== 'ok') return;
 
-            const alerts = data.alerts;
+            allAlerts = data.alerts;
 
             // Stats
-            document.getElementById('statTotal').textContent = alerts.length;
-            document.getElementById('statSOS').textContent = alerts.filter(a => a.alert_type === 'SOS').length;
-            document.getElementById('statMedical').textContent = alerts.filter(a => a.alert_type === 'MEDICAL').length;
-            document.getElementById('statDevices').textContent = new Set(alerts.map(a => a.device_id)).size;
-            const totalFiles = alerts.reduce((sum, a) => sum + (a.uploaded_files ? a.uploaded_files.split(',').filter(f => f.trim()).length : 0), 0);
+            document.getElementById('statTotal').textContent = allAlerts.length;
+            document.getElementById('statSOS').textContent = allAlerts.filter(a => a.alert_type === 'SOS').length;
+            document.getElementById('statMedical').textContent = allAlerts.filter(a => a.alert_type === 'MEDICAL').length;
+            document.getElementById('statDevices').textContent = new Set(allAlerts.map(a => a.device_id)).size;
+            const totalFiles = allAlerts.reduce((sum, a) => sum + (a.uploaded_files ? a.uploaded_files.split(',').filter(f => f.trim()).length : 0), 0);
             document.getElementById('statFiles').textContent = totalFiles;
 
-            // Device Cards (replaces recent alerts table)
-            document.getElementById('deviceList').innerHTML = buildDeviceCards(alerts);
+            // Device Cards
+            document.getElementById('deviceList').innerHTML = buildDeviceCards(allAlerts);
 
             // Full table
-            document.getElementById('allTable').innerHTML = buildFullTable(alerts);
-
-            // Evidence
-            document.getElementById('evidenceGrid').innerHTML = buildEvidenceGrid(alerts);
+            document.getElementById('allTable').innerHTML = buildFullTable(allAlerts);
 
             // Map
             markers.clearLayers();
             let mc = 0;
             const bounds = [];
-            for (const a of alerts) {
+            for (const a of allAlerts) {
                 const coords = parseGPS(a.gps_location);
                 if (!coords) continue;
                 const icon = a.alert_type === 'SOS' ? sosIcon : a.alert_type === 'MEDICAL' ? medicalIcon : defaultIcon;
@@ -814,8 +642,7 @@
                     <b>Device:</b> ${esc(a.device_id)}<br>
                     <b>Source:</b> ${triggerBadge(a.trigger_source)}<br>
                     <b>Time:</b> ${formatTime(a.timestamp)}<br>
-                    <b>Battery:</b> ${esc(a.battery_percentage) || '-'}<br>
-                    <b>GPS:</b> ${esc(a.gps_location)}
+                    <b>Battery:</b> ${esc(a.battery_percentage) || '-'}
                     </div>
                 `).addTo(markers);
                 bounds.push(coords);
