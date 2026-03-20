@@ -1,28 +1,15 @@
 """
 alerts.py — Project Kavach
 
-All three alert pipelines in one place.
+All three alert pipelines in one place. Each function receives the shared
+SIM7600 instance from main.py (single serial port, thread-safe).
 
   sos_sequence()     → calls police, SMS guardian, GPS loop, evidence upload
   medical_sequence() → calls ambulance/medical contact, SMS "MEDICAL EMERGENCY" + GPS
   safe_sequence()    → SMS "I AM SAFE" to guardian, cancels any active SOS loop
 
-FIXES APPLIED:
-
-① Serial port conflict (original fix kept):
-    Every function accepts `sim: SIM7600` as its first argument.
-    A single shared instance is created once at boot in main.py and passed in.
-
-② GPS double-URL bug:
-    comms.py:get_gps_location() now returns raw "lat,lon" coordinates, not a
-    full Google Maps URL.  The _build_maps_link() helper here correctly turns
-    those coordinates into a Maps URL.  Previously this caused the URL to be
-    re-processed as if it were a coordinate string, and the fallback silently
-    returned the raw URL — so the bug was invisible but data was wrong.
-
-③ Duplicate state removed:
-    The duplicate _alert_lock / _active_alert_type state has been removed.
-    KavachStateMachine in main.py is now the single source of truth for state.
+State ownership lives in KavachStateMachine (main.py). This module only
+owns the _stop_alert_event used to signal the update loop to exit.
 """
 
 import time
@@ -92,7 +79,7 @@ def _build_maps_link(location: str) -> str:
     """
     Turns a raw GPS string "lat,lon" into a Google Maps link.
 
-    FIX ②: comms.py now returns raw "lat,lon" so this function works correctly.
+    comms.py returns raw "lat,lon" coordinates; this function builds the URL.
     Falls back gracefully if the format is unexpected.
     """
     try:

@@ -1,12 +1,8 @@
 """
 crypto_utils.py — Kavach Server
 
-AES-CBC and ChaCha20-Poly1305 encrypt/decrypt helpers.
-
-FIXES APPLIED:
-  - load_aes_key() now uses os.path.abspath(__file__) so it works regardless
-    of the working directory (was using a bare relative path before).
-  - Merged the two duplicate `if __name__ == "__main__"` blocks into one.
+AES-CBC and ChaCha20-Poly1305 encrypt/decrypt helpers. Used by the device
+(Pi) to encrypt telemetry before upload, and by the server to decrypt it.
 """
 
 import os
@@ -19,8 +15,7 @@ from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 # ── Key loaders ──────────────────────────────────────────────────────────────
 
 def load_aes_key() -> bytes:
-    # FIX: use __file__ so the path is always resolved relative to this module,
-    # not the current working directory.
+    # Resolve relative to this module, not the current working directory
     base_dir = os.path.dirname(os.path.abspath(__file__))
     key_path = os.path.join(base_dir, "keys", "aes.key")
     with open(key_path, "rb") as f:
@@ -83,7 +78,7 @@ def chacha_decrypt_bytes(encrypted_data: bytes) -> bytes:
 
     Used to decrypt evidence files (video clips, images) that the device
     encrypted before uploading.  The device calls chacha_encrypt_bytes()
-    on the client side.
+    in its own crypto_utils.py before sending to the server.
     """
     key    = load_chacha_key()
     chacha = ChaCha20Poly1305(key)

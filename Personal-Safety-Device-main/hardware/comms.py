@@ -1,27 +1,9 @@
 """
 hardware/comms.py — Project Kavach
 
-SIM7600G-H driver. Handles AT commands, SMS, voice calls, GPS, and HTTP uploads.
-
-FIXES APPLIED:
-  ① upload_alert() now encrypts the telemetry payload with ChaCha20-Poly1305
-      before sending.  The server's POST /api/alerts handler requires an
-      `encrypted_payload` form field — sending plaintext resulted in HTTP 400
-      on every upload attempt.
-
-  ② upload_alert() now reads `saved_files[0]` from the server response.
-      The server returns { "saved_files": [...] }, not { "filename": ... }.
-      The old code always got None, so the guardian SMS link was always wrong.
-
-  ③ get_gps_location() now returns a raw "lat,lon" string instead of a full
-      Google Maps URL.  alerts.py calls _build_maps_link() on whatever this
-      function returns, so returning a URL caused double-processing and broken
-      coordinate parsing.  alerts.py already builds the Maps link itself.
-
-  ④ Added close() method so the shared instance can cleanly release the serial
-      port on shutdown (called from main.py's finally block).
-
-  ⑤ Replaced bare print() calls with proper logging.
+SIM7600G-H driver. Handles AT commands, SMS, voice calls, GPS, and
+encrypted evidence uploads to the Kavach server. Thread-safe — all
+public methods acquire self._lock before accessing the serial port.
 """
 
 import serial
@@ -46,7 +28,7 @@ class SIM7600:
             self.ser = None
             logger.error("[SIM7600] Serial not available on %s — %s", port, e)
 
-    # ── FIX ④: close() — call once on shutdown from main.py ──────────────────
+    # ── close() — called from main.py's finally block on shutdown ────────────
     def close(self):
         """Cleanly release the serial port. Safe to call even if never opened."""
         try:
@@ -111,12 +93,8 @@ class SIM7600:
     def get_gps_location(self):
         """
         Returns a raw coordinate string "lat,lon" (e.g. "12.9716,77.5946"),
-        or None if no fix could be obtained.
-
-        FIX ③: Previously returned a full Google Maps URL.  alerts.py calls
-        _build_maps_link() on this value, so returning a URL caused it to be
-        double-processed and the coordinate parsing broke.  Return raw coords
-        here and let alerts.py build the URL as intended.
+        or None if no fix could be obtained. alerts.py builds the Google Maps
+        URL from these raw coordinates via _build_maps_link().
         """
         if not self.ser:
             return None
@@ -158,14 +136,8 @@ class SIM7600:
     # ── Evidence upload ───────────────────────────────────────────────────────
     def upload_alert(self, server_url, alert_object, file_path):
         """
-        Encrypts the alert telemetry and uploads it together with an evidence
-        file to the Flask server.
-
-        FIX ①: payload is now ChaCha20-Poly1305 encrypted and sent as
-                `encrypted_payload` (base64-encoded) — matching the server's
-                POST /api/alerts handler.
-        FIX ②: reads `saved_files[0]` from the server JSON response instead of
-                the nonexistent `filename` key.
+        Encrypts the alert telemetry with ChaCha20-Poly1305 and uploads it
+        together with an evidence file to the Kavach server.
 
         Returns (True, server_filename) on success, (False, None) on failure.
         """
@@ -187,7 +159,7 @@ class SIM7600:
                 'battery_percentage':  alert_object.battery_percentage,
             }
 
-            # FIX ①: encrypt before sending
+            # Encrypt before sending
             from crypto_utils import chacha_encrypt_text
             payload_json  = json.dumps(payload_dict)
             encrypted     = chacha_encrypt_text(payload_json)
@@ -212,7 +184,7 @@ class SIM7600:
             if r.status_code == 201:
                 logger.info("[SIM7600] Uploaded %s.", os.path.basename(file_path))
                 try:
-                    # FIX ②: server returns saved_files list, not filename
+                    # Server returns saved_files list
                     response_json   = r.json()
                     saved_files     = response_json.get('saved_files', [])
                     uploaded_filename = (

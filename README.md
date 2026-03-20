@@ -403,8 +403,8 @@ Open `https://your-name.ngrok-free.dev/` (or `http://localhost:8080/`) to see:
 - **Auto-refresh** every 30 seconds
 - **Sign Out** button in header
 
-### 2. App-ready API Endpoints
-REST API endpoints ready for a future mobile app:
+### 2. Mobile App API Endpoints
+REST API endpoints used by the Kavach Flutter app:
 
 | Method | Endpoint | Auth | Purpose |
 |--------|----------|------|---------|

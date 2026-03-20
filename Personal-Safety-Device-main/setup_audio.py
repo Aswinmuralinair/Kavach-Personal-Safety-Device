@@ -1,7 +1,7 @@
 """
 setup_audio.py — Project Kavach
 Run this ONCE to download the YAMNet model and class map into models/.
-Fixed for 403 Forbidden errors.
+Uses browser-style headers to avoid 403 Forbidden from Google Storage.
 """
 
 import os
@@ -13,9 +13,9 @@ MODEL_URL      = "https://storage.googleapis.com/tfhub-lite-models/google/lite-m
 # Official AudioSet Class Map
 CLASS_MAP_URL  = "https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv"
 
-# Updated to match the filenames expected by audio.py
-MODEL_PATH     = os.path.join(MODELS_DIR, "keyword_model.tflite")
-CLASS_MAP_PATH = os.path.join(MODELS_DIR, "keyword_labels.txt")
+# Must match the filenames audio.py loads at runtime
+MODEL_PATH     = os.path.join(MODELS_DIR, "yamnet.tflite")
+CLASS_MAP_PATH = os.path.join(MODELS_DIR, "yamnet_class_map.csv")
 
 def download(url: str, dest: str, label: str) -> None:
     if os.path.exists(dest):
@@ -25,11 +25,10 @@ def download(url: str, dest: str, label: str) -> None:
 
     print(f"   [DOWN] {label}")
     
-    # --- FIXED: ADDED BROWSER HEADERS TO BYPASS 403 FORBIDDEN ---
+    # Browser-style User-Agent to avoid 403 from Google Storage CDN
     opener = urllib.request.build_opener()
     opener.addheaders = [('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')]
     urllib.request.install_opener(opener)
-    # ------------------------------------------------------------
 
     def progress(block_count, block_size, total_size):
         if total_size > 0:

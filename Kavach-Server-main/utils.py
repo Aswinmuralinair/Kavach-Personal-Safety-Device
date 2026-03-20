@@ -2,12 +2,6 @@
 utils.py — Kavach Server
 
 File saving, SHA-256 hash helpers, and evidence file decryption.
-
-FIXES APPLIED:
-  - `str | None` return type replaced with `Optional[str]` for Python 3.9
-    compatibility (`X | Y` union syntax in annotations requires Python 3.10+).
-  - Added decrypt_file_in_place() to handle encrypted evidence files from the
-    device.  The device encrypts evidence with ChaCha20-Poly1305 before upload.
 """
 
 import os

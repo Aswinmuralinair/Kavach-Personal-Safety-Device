@@ -547,7 +547,7 @@
                 <td>${typeBadge(a.alert_type)}</td>
                 <td>${esc(a.trigger_source) || '-'}</td>
                 <td>${gpsLink(a.gps_location)}</td>
-                <td>${a.battery_percentage != null ? a.battery_percentage + '%' : '-'}</td>
+                <td>${a.battery_percentage != null ? esc(a.battery_percentage) + '%' : '-'}</td>
                 <td>${statusDot(a.call_placed_status)}</td>
                 <td>${statusDot(a.guardian_sms_status)}</td>
                 <td>${evidenceLinks(a.uploaded_files)}</td>

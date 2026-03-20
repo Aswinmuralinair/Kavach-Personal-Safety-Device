@@ -247,8 +247,7 @@ def validate_config(config: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Module-level state machine instance placeholder
-# (assigned after SIM7600 is constructed in __main__)
+# Module-level state machine instance (assigned in __main__ after SIM7600 init)
 # ─────────────────────────────────────────────────────────────────────────────
 kavach:      KavachStateMachine = None   # type: ignore — set in __main__
 lora_manager: LoRaManager       = None   # type: ignore — set in __main__

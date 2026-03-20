@@ -1,24 +1,22 @@
 """
 app.py - Kavach Server
 
-Enhanced Flask API with:
+Flask API with admin dashboard, mobile app auth, and device telemetry:
+  GET  /                   - admin dashboard (login required)
   POST /api/alerts         - receive encrypted telemetry + evidence files
+  GET  /api/alerts         - list all alerts (dashboard)
+  GET  /api/alerts/<id>    - single alert detail with hash verification
   GET  /api/health         - server + database health check
-  GET  /api/alerts         - list all alerts (for future dashboard)
-  GET  /api/alerts/<id>    - single alert detail with hash verification status
   GET  /uploads/<file>     - serve evidence files
-
-FIXES APPLIED:
-  ① datetime.UTC → datetime.timezone.utc
-      datetime.UTC was only added in Python 3.11.
-      datetime.timezone.utc has existed since Python 3.2 - safe everywhere.
-
-  ② Alert.query.get(id) → db.session.get(Alert, id)
-      Query.get() was deprecated in SQLAlchemy 1.4 and REMOVED in 2.0.
-      db.session.get(Model, pk) is the correct 2.x API.
-
-  ③ Negative `limit` values now clamped to 1
-      ?limit=-1 previously bypassed the cap and dumped the entire table.
+  POST /api/auth/signup    - create mobile app account (user/guardian)
+  POST /api/auth/login     - get auth token for mobile app
+  GET  /api/user/alerts    - user's alerts (token auth)
+  GET  /api/guardian/alerts - guardian's alerts (token auth)
+  GET  /api/user/locations - location history (token auth)
+  GET  /api/user/config    - get device phone numbers (token auth)
+  PUT  /api/user/config    - update phone numbers from app (token auth)
+  GET  /api/device/config/<device_id> - Pi polls this for config updates
+  GET  /api/guardian/evidence/<id> - evidence files (token auth)
 """
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, session, redirect, url_for
@@ -86,10 +84,9 @@ def _save_device_config(device_id: str, config: dict):
         json.dump(config, f, indent=2)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# App-ready API auth (for future mobile app)
+# Mobile app API auth (Kavach Flutter app)
 # Uses itsdangerous (bundled with Flask) for signed tokens - no PyJWT needed.
-#
-# FIX: SECRET_KEY is persisted to .secret_key file so auth tokens survive
+# SECRET_KEY is persisted to .secret_key file so auth tokens survive
 # server restarts.  Override via KAVACH_SECRET_KEY env var if desired.
 # ─────────────────────────────────────────────────────────────────────────────
 def _load_or_create_secret_key() -> str:
@@ -113,17 +110,16 @@ app.config['SECRET_KEY'] = _load_or_create_secret_key()
 _token_serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FIX ① - use datetime.timezone.utc everywhere instead of datetime.UTC
-# datetime.UTC was only added in Python 3.11; timezone.utc works on 3.2+
+# UTC alias — datetime.timezone.utc works on Python 3.2+
 # ─────────────────────────────────────────────────────────────────────────────
-_UTC = datetime.timezone.utc                                   # ← single alias
+_UTC = datetime.timezone.utc
 
 # Boot time - used in /api/health uptime calculation
 _SERVER_START_TIME = datetime.datetime.now(_UTC)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Admin credentials (change these!)
+# Admin credentials — CHANGE DEFAULTS before production use!
 # ─────────────────────────────────────────────────────────────────────────────
 ADMIN_USERNAME = os.environ.get('KAVACH_ADMIN_USER', 'admin')
 ADMIN_PASSWORD = os.environ.get('KAVACH_ADMIN_PASS', 'kavach2026')
@@ -163,8 +159,8 @@ def _hash_password(password: str) -> str:
 
 
 def _check_password(stored_hash: str, password: str) -> bool:
-    """Verify password against stored hash. Supports legacy SHA-256 hashes."""
-    # Support legacy SHA-256 hashes (64 hex chars, no prefix)
+    """Verify password against stored hash. Backward-compatible with old SHA-256 hashes."""
+    # Backward compatibility: old accounts used bare SHA-256 before pbkdf2 migration
     if len(stored_hash) == 64 and not stored_hash.startswith('pbkdf2:'):
         import hashlib
         return stored_hash == hashlib.sha256(password.encode()).hexdigest()
@@ -220,7 +216,7 @@ def dashboard():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# App-ready API - Auth + Role-based endpoints (for future mobile app)
+# App API - Auth + Role-based endpoints (Kavach Flutter app)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _create_token(device_id: str, role: str) -> str:
@@ -641,7 +637,7 @@ def receive_alert():
         # ── 8. Write to database ──────────────────────────────────────────────
         new_alert = Alert(
             device_id           = device_id,
-            timestamp           = datetime.datetime.now(_UTC),          # FIX ①
+            timestamp           = datetime.datetime.now(_UTC),
             alert_type          = data.get('alert_type'),
             trigger_source      = data.get('trigger_source'),
             call_placed_status  = str(data.get('call_placed_status',  'false')).lower() == 'true',
@@ -692,12 +688,12 @@ def health():
             else None
         )
         uptime_seconds = int(
-            (datetime.datetime.now(_UTC) - _SERVER_START_TIME).total_seconds()   # FIX ①
+            (datetime.datetime.now(_UTC) - _SERVER_START_TIME).total_seconds()
         )
         return jsonify({
             'status':        'ok',
             'server':        'Kavach API',
-            'version':       '2.0',
+            'version':       '3.3',
             'uptime_seconds': uptime_seconds,
             'uptime_human':  _format_uptime(uptime_seconds),
             'database': {
@@ -734,7 +730,7 @@ def _format_uptime(seconds: int) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/alerts
 # Optional: ?device_id=KAVACH-001   ?limit=20
-# FIX ③: clamp limit to [1, 200] - prevents ?limit=-1 dumping the full table
+# Clamp limit to [1, 200] to prevent abuse
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/api/alerts', methods=['GET'])
 def list_alerts():
@@ -749,7 +745,7 @@ def list_alerts():
                 'message': f"Invalid limit '{raw_limit}'. Expected integer in [1, 200].",
             }), 400
 
-        # FIX ③: max(1, ...) prevents negative limits that bypass the cap
+        # Clamp to valid range
         limit = max(1, min(parsed_limit, 200))
         query = Alert.query.order_by(Alert.id.desc())
         if device_id:
@@ -772,7 +768,7 @@ def list_alerts():
 @app.route('/api/alerts/<int:alert_id>', methods=['GET'])
 def get_alert(alert_id: int):
     try:
-        # FIX ②: Alert.query.get() removed in SQLAlchemy 2.0
+        # db.session.get() is the correct SQLAlchemy 2.x API
         alert = DB.session.get(Alert, alert_id)
         if not alert:
             return jsonify({'status': 'error', 'message': 'Alert not found'}), 404
@@ -918,21 +914,25 @@ if __name__ == '__main__':
         DB.create_all()
 
     logger.info("=" * 55)
-    logger.info(" Kavach Server v2.0 starting")
+    logger.info(" Kavach Server v3.3 starting")
     logger.info(" Database: kavach.db")
     logger.info(" Upload dir: %s", UPLOAD_DIR)
     logger.info(" Endpoints:")
     logger.info("   GET  /                  - admin dashboard (login required)")
     logger.info("   GET  /login             - admin login page")
     logger.info("   GET  /logout            - admin logout")
-    logger.info("   POST /api/alerts        - receive telemetry")
-    logger.info("   GET  /api/alerts        - list all alerts")
-    logger.info("   GET  /api/alerts/<id>   - alert detail + hash check")
-    logger.info("   GET  /api/health        - server health")
-    logger.info("   GET  /uploads/<file>    - serve evidence")
-    logger.info("   POST /api/auth/login    - app auth token")
-    logger.info("   GET  /api/user/alerts   - user alerts (app)")
-    logger.info("   GET  /api/guardian/alerts - guardian alerts (app)")
+    logger.info("   POST /api/alerts          - receive telemetry")
+    logger.info("   GET  /api/alerts          - list all alerts")
+    logger.info("   GET  /api/alerts/<id>     - alert detail + hash check")
+    logger.info("   GET  /api/health          - server health")
+    logger.info("   GET  /uploads/<file>      - serve evidence")
+    logger.info("   POST /api/auth/signup     - create app account")
+    logger.info("   POST /api/auth/login      - app auth token")
+    logger.info("   GET  /api/user/alerts     - user alerts (app)")
+    logger.info("   GET  /api/guardian/alerts  - guardian alerts (app)")
+    logger.info("   GET  /api/user/config     - get phone numbers (app)")
+    logger.info("   PUT  /api/user/config     - update phone numbers (app)")
+    logger.info("   GET  /api/device/config   - Pi config polling")
     logger.info("=" * 55)
 
     # Start ngrok tunnel in the background

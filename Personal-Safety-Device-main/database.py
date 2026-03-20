@@ -1,21 +1,17 @@
 """
-database.py — Personal Safety Device (client side)
+database.py — Personal Safety Device (Raspberry Pi)
 
-FIXES APPLIED:
-  - `from sqlalchemy.ext.declarative import declarative_base` was removed in
-    SQLAlchemy 2.0. Now imports from `sqlalchemy.orm` (works on 1.4 and 2.x).
-  - datetime.UTC → datetime.timezone.utc  (Python 3.2+ compatible)
-  - Column default is now a callable lambda so each row gets the current time,
-    not the single timestamp captured at import time.
+SQLAlchemy model for the local Alert table. Stores alert records on the
+device before they are uploaded to the Kavach server.
 """
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean
-from sqlalchemy.orm import declarative_base    # FIX: was sqlalchemy.ext.declarative
+from sqlalchemy.orm import declarative_base
 import datetime
 
 Base = declarative_base()
 
-_UTC = datetime.timezone.utc   # FIX: datetime.UTC requires Python 3.11+
+_UTC = datetime.timezone.utc
 
 
 class Alert(Base):
@@ -23,7 +19,7 @@ class Alert(Base):
 
     id        = Column(Integer, primary_key=True)
 
-    # FIX: lambda makes the default evaluate per-row, not once at import time
+    # Lambda ensures each row gets the current time, not a fixed import-time value
     timestamp = Column(DateTime, default=lambda: datetime.datetime.now(_UTC))
     device_id = Column(String(64), nullable=False)
 

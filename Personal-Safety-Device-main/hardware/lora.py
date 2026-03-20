@@ -419,7 +419,7 @@ class SX1278LoRa(BaseLoRa):
             return False
 
         with self._tx_lock:
-            # Temporarily stop RX if running
+            # Pause RX during TX (resumed after transmission)
             was_receiving = self._rx_running
             if was_receiving:
                 self._write_register(REG_OP_MODE, MODE_LONG_RANGE | MODE_STANDBY)

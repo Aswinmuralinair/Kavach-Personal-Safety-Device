@@ -1,12 +1,8 @@
 """
 database.py — Kavach Server
 
-SQLAlchemy model for the Alert table.
-
-FIXES APPLIED:
-  - datetime.UTC → datetime.timezone.utc  (Python 3.2+ compatible)
-  - Column default is now a callable lambda so each row gets the current time,
-    not the single timestamp captured at import time.
+SQLAlchemy model for the Alert table. Used by both the Flask API and the
+admin web dashboard.
 """
 
 from flask_sqlalchemy import SQLAlchemy
@@ -24,7 +20,7 @@ class Alert(DB.Model):
     id = DB.Column(DB.Integer, primary_key=True)
 
     # ── When and who ──────────────────────────────────────────────────────────
-    # FIX: use a lambda so the default is evaluated per-row, not once at import
+    # Lambda ensures each row gets the current time, not a fixed import-time value
     timestamp  = DB.Column(DB.DateTime, default=lambda: datetime.datetime.now(_UTC))
     device_id  = DB.Column(DB.String(64), nullable=False)
 
