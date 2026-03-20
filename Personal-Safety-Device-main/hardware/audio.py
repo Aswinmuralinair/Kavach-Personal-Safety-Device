@@ -59,8 +59,8 @@ CLASS_MAP_PATH = os.path.join(_PROJECT_DIR, "models", "yamnet_class_map.csv")
 # ─────────────────────────────────────────────────────────────────────────────
 
 SAMPLE_RATE        = 16000
-WINDOW_SECONDS     = 1.0
-WINDOW_SAMPLES     = int(SAMPLE_RATE * WINDOW_SECONDS)
+YAMNET_INPUT       = 15600          # YAMNet expects exactly 15600 samples (0.975s)
+WINDOW_SAMPLES     = YAMNET_INPUT
 OVERLAP_SECONDS    = 0.5
 OVERLAP_SAMPLES    = int(SAMPLE_RATE * OVERLAP_SECONDS)
 HOP_SAMPLES        = WINDOW_SAMPLES - OVERLAP_SAMPLES
