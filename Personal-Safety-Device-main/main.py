@@ -272,7 +272,7 @@ audio_recorder: AudioRecorderManager = None   # type: ignore — set in __main__
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG POLLING — syncs remote config changes from the Kavach server
 # ─────────────────────────────────────────────────────────────────────────────
-CONFIG_POLL_INTERVAL = 60   # seconds between polls (1 minute)
+CONFIG_POLL_INTERVAL = 10   # seconds between polls
 
 def _config_poll_loop(config: dict, power_monitor=None) -> None:
     """

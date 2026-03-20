@@ -75,7 +75,7 @@ os.makedirs(CONFIG_DIR, exist_ok=True)
 # In-memory device status — updated every time the Pi polls /api/device/config
 # ─────────────────────────────────────────────────────────────────────────────
 _device_status = {}   # { device_id: { "battery": "85%", "last_seen": datetime } }
-_DEVICE_ONLINE_TIMEOUT = 120   # seconds — device is "offline" if not seen in 2 min
+_DEVICE_ONLINE_TIMEOUT = 30   # seconds — device is "offline" if not seen in 30s
 
 
 def _update_device_status(device_id: str, battery: str):
