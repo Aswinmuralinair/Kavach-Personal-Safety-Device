@@ -414,7 +414,7 @@
     function triggerBadge(src) {
         if (!src) return '<span style="color:var(--text-muted)">-</span>';
         const labels = {
-            'keyboard_demo': 'Manual Test', 'button': 'SOS Button',
+            'button': 'SOS Button',
             'fall_detection': 'Fall Detected', 'heart_rate': 'Heart Rate Spike',
             'audio_detection': 'Danger Sound', 'lora_relay': 'LoRa Mesh Relay'
         };
@@ -612,7 +612,7 @@
             const data = await res.json();
             if (data.status !== 'ok') return;
 
-            allAlerts = data.alerts;
+            allAlerts = data.alerts.filter(a => a.trigger_source !== 'keyboard_demo');
 
             // Stats
             document.getElementById('statTotal').textContent = allAlerts.length;
