@@ -713,16 +713,13 @@ if __name__ == '__main__':
     except (ImportError, RuntimeError):
         _on_pi = False
 
-    if not _on_pi:
-        threading.Thread(
-            target=_keyboard_listener,
-            args=(sensor_manager, audio_manager),
-            name="KeyboardDemo",
-            daemon=True,
-        ).start()
-        logger.info("[Boot] Keyboard demo listener started (desktop mode).")
-    else:
-        logger.info("[Boot] Running on Pi — keyboard demo keys disabled (using real hardware).")
+    threading.Thread(
+        target=_keyboard_listener,
+        args=(sensor_manager, audio_manager),
+        name="KeyboardDemo",
+        daemon=True,
+    ).start()
+    logger.info("[Boot] Keyboard listener started (keys: s=SOS d=MEDICAL l=SAFE f=fall h=heart a=audio q=quit).")
 
     # ── 14. Ready ─────────────────────────────────────────────────────────────
     logger.info("=" * 60)
