@@ -33,6 +33,14 @@ CONCURRENT TRIGGER THREADS (all run from boot, daemon threads):
   Thread 4: YAMNetAudioThread  — continuous mic stream + inference
   Thread 5: LoRaRX             — continuous SX1278 receive loop
 
+EVIDENCE CAPTURE (started/stopped per alert, daemon threads):
+  CameraManager        — 30-second H264 clips via Pi Camera / FakeCameraRecorder
+  AudioRecorderManager — 30-second WAV clips via microphone / FakeAudioRecorder
+
+BACKGROUND SERVICES (daemon threads):
+  ConfigSync           — polls server every 60s for app-pushed config changes
+  KeyboardDemo         — (desktop only) listens for f/h/a/s/d/l/q demo keys
+
 FIX applied (serial port conflict):
   A single SIM7600 instance is created once at boot (step 3) and stored on
   the KavachStateMachine.  Every call to trigger_alert() and trigger_safe()
@@ -48,11 +56,13 @@ import os
 
 from enum import Enum, auto
 from database import Base
-from hardware.button  import ButtonHandler
-from hardware.sensors import SensorManager
-from hardware.audio   import AudioManager, DetectionEvent
-from hardware.lora    import LoRaManager, LoRaPacket
-from hardware.comms   import SIM7600
+from hardware.button         import ButtonHandler
+from hardware.sensors        import SensorManager
+from hardware.audio          import AudioManager, DetectionEvent
+from hardware.lora           import LoRaManager, LoRaPacket
+from hardware.comms          import SIM7600
+from hardware.camera         import CameraManager
+from hardware.audio_recorder import AudioRecorderManager
 from alerts import sos_sequence, medical_sequence, safe_sequence
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,11 +110,14 @@ class KavachStateMachine:
       before this machine is started.
     """
 
-    def __init__(self, sim: SIM7600):
+    def __init__(self, sim: SIM7600, cam: CameraManager = None,
+                 mic: AudioRecorderManager = None):
         self._state      = DeviceState.IDLE
         self._lock       = threading.Lock()
         self._alert_type = None   # "sos" | "medical" | None
         self._sim        = sim    # shared serial port — never re-opened
+        self._cam        = cam    # evidence video recording
+        self._mic        = mic    # evidence audio recording
 
     # ── Public properties ─────────────────────────────────────────────────────
     @property
@@ -156,10 +169,11 @@ class KavachStateMachine:
         # Launch the alert sequence in a daemon thread (outside the lock)
         if alert_type == "sos":
             target = sos_sequence
-            kwargs = {"sim": self._sim, "trigger_source": trigger_source}
+            kwargs = {"sim": self._sim, "trigger_source": trigger_source,
+                      "cam": self._cam, "mic": self._mic}
         elif alert_type == "medical":
             target = medical_sequence
-            kwargs = {"sim": self._sim}
+            kwargs = {"sim": self._sim, "cam": self._cam, "mic": self._mic}
         else:
             logger.error("[StateMachine] Unknown alert_type: '%s'", alert_type)
             with self._lock:
@@ -209,7 +223,8 @@ class KavachStateMachine:
 
         threading.Thread(
             target=safe_sequence,
-            kwargs={"sim": self._sim, "was_active_type": was_active},
+            kwargs={"sim": self._sim, "was_active_type": was_active,
+                    "cam": self._cam, "mic": self._mic},
             name="Safe",
             daemon=True
         ).start()
@@ -247,10 +262,192 @@ def validate_config(config: dict) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Module-level state machine instance (assigned in __main__ after SIM7600 init)
+# Module-level instances (assigned in __main__ after hardware init)
 # ─────────────────────────────────────────────────────────────────────────────
-kavach:      KavachStateMachine = None   # type: ignore — set in __main__
-lora_manager: LoRaManager       = None   # type: ignore — set in __main__
+kavach:         KavachStateMachine   = None   # type: ignore — set in __main__
+lora_manager:   LoRaManager          = None   # type: ignore — set in __main__
+camera_manager: CameraManager        = None   # type: ignore — set in __main__
+audio_recorder: AudioRecorderManager = None   # type: ignore — set in __main__
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIG POLLING — syncs remote config changes from the Kavach server
+# ─────────────────────────────────────────────────────────────────────────────
+CONFIG_POLL_INTERVAL = 60   # seconds between polls (1 minute)
+
+def _config_poll_loop(config: dict) -> None:
+    """
+    Background thread: polls the server's /api/device/config/<device_id>
+    endpoint periodically. If the server has updated phone numbers (from
+    the mobile app), merges them into the local config.json.
+
+    Only syncs phone number fields — serial_port, baud_rate, etc. are
+    never overwritten by the server.
+    """
+    device_id  = config.get('device_id', 'KAVACH-001')
+    server_url = config.get('server_url', '')
+
+    # Derive base URL from the alerts endpoint (strip /api/alerts)
+    if '/api/alerts' in server_url:
+        base_url = server_url.rsplit('/api/alerts', 1)[0]
+    elif server_url.endswith('/'):
+        base_url = server_url.rstrip('/')
+    else:
+        base_url = server_url
+
+    poll_url = f"{base_url}/api/device/config/{device_id}"
+    logger.info("[ConfigSync] Polling %s every %ds.", poll_url, CONFIG_POLL_INTERVAL)
+
+    syncable_keys = {'police_number', 'guardian_number', 'medical_number', 'whatsapp_number'}
+
+    while True:
+        time.sleep(CONFIG_POLL_INTERVAL)
+        try:
+            import requests
+            r = requests.get(poll_url, timeout=10)
+            if r.status_code != 200:
+                logger.debug("[ConfigSync] Server returned %d — skipping.", r.status_code)
+                continue
+
+            remote = r.json().get('config', {})
+            if not remote:
+                logger.debug("[ConfigSync] No remote config yet — skipping.")
+                continue
+
+            # Check if any syncable field differs from local config
+            local_config  = load_config()
+            changes       = {}
+            for key in syncable_keys:
+                remote_val = remote.get(key, '').strip()
+                local_val  = local_config.get(key, '').strip()
+                if remote_val and remote_val != local_val:
+                    changes[key] = remote_val
+
+            if not changes:
+                logger.debug("[ConfigSync] No changes detected.")
+                continue
+
+            # Merge changes into local config.json
+            local_config.update(changes)
+            config_path = os.path.join(BASE_DIR, 'config.json')
+            with open(config_path, 'w') as f:
+                json.dump(local_config, f, indent=2)
+
+            logger.info(
+                "[ConfigSync] Config updated from server: %s",
+                ', '.join(f"{k}={v}" for k, v in changes.items())
+            )
+
+        except Exception as exc:
+            logger.debug("[ConfigSync] Poll failed (server may be offline): %s", exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# KEYBOARD DEMO — console key listener for testing without hardware
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _keyboard_listener(sensor_manager: SensorManager, audio_manager: AudioManager) -> None:
+    """
+    Reads single-character key presses from stdin for desktop demo/testing.
+
+    Key bindings:
+      f  → Fake fall event   (IMU spike → triggers SOS)
+      h  → Fake heart spike  (BPM 150+  → triggers SOS)
+      a  → Fake danger sound (screaming → triggers SOS)
+      s  → Simulate SOS      (single button press)
+      d  → Simulate MEDICAL  (double button press)
+      l  → Simulate SAFE     (long press cancel)
+      q  → Quit
+
+    Only active when running on desktop (no GPIO) — on the Pi, real
+    hardware triggers are used instead and this thread is not started.
+    """
+    import sys
+    import select
+
+    # Cross-platform single-char reader
+    try:
+        # Unix: use termios for raw unbuffered input
+        import tty
+        import termios
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
+        def read_key():
+            tty.setraw(fd)
+            try:
+                ch = sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            return ch
+
+    except (ImportError, AttributeError):
+        # Windows: use msvcrt for unbuffered input
+        try:
+            import msvcrt
+
+            def read_key():
+                if msvcrt.kbhit():
+                    return msvcrt.getch().decode('utf-8', errors='ignore').lower()
+                time.sleep(0.1)
+                return ''
+        except ImportError:
+            logger.warning("[Keyboard] No keyboard input method available — demo keys disabled.")
+            return
+
+    logger.info("[Keyboard] Demo key listener active:")
+    logger.info("   f=fall  h=heartrate  a=audio  s=SOS  d=MEDICAL  l=SAFE  q=quit")
+
+    while True:
+        try:
+            key = read_key()
+            if not key:
+                continue
+
+            key = key.lower()
+            if key == 'f':
+                logger.info("[Keyboard] 'f' pressed → triggering fake fall event")
+                if hasattr(sensor_manager.imu, 'trigger_fall_now'):
+                    sensor_manager.imu.trigger_fall_now()
+                else:
+                    logger.warning("[Keyboard] IMU is real hardware — cannot simulate fall.")
+
+            elif key == 'h':
+                logger.info("[Keyboard] 'h' pressed → triggering fake heart rate spike")
+                if hasattr(sensor_manager.heart_rate, 'trigger_distress_now'):
+                    sensor_manager.heart_rate.trigger_distress_now()
+                else:
+                    logger.warning("[Keyboard] Heart rate is real hardware — cannot simulate.")
+
+            elif key == 'a':
+                logger.info("[Keyboard] 'a' pressed → triggering fake danger sound (screaming)")
+                audio_manager.simulate_detection("screaming")
+
+            elif key == 's':
+                logger.info("[Keyboard] 's' pressed → triggering SOS (single press)")
+                kavach.trigger_alert("sos", "keyboard_demo")
+
+            elif key == 'd':
+                logger.info("[Keyboard] 'd' pressed → triggering MEDICAL (double press)")
+                kavach.trigger_alert("medical", "keyboard_demo")
+
+            elif key == 'l':
+                logger.info("[Keyboard] 'l' pressed → triggering SAFE (long press cancel)")
+                kavach.trigger_safe()
+
+            elif key == 'q':
+                logger.info("[Keyboard] 'q' pressed → shutdown requested")
+                # Raise KeyboardInterrupt in main thread
+                import _thread
+                _thread.interrupt_main()
+                break
+
+        except (EOFError, OSError):
+            # stdin closed (running as service, piped, etc.)
+            logger.debug("[Keyboard] stdin closed — demo keys disabled.")
+            break
+        except Exception as exc:
+            logger.debug("[Keyboard] Error: %s", exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -426,15 +623,25 @@ if __name__ == '__main__':
     sim = SIM7600(port=config['serial_port'], baud=config['baud_rate'])
     logger.info("[Boot] SIM7600 initialized on %s.", config['serial_port'])
 
-    # ── 4. State machine — inject the shared sim ──────────────────────────────
-    kavach = KavachStateMachine(sim=sim)
+    # ── 4. Evidence recorders (camera + microphone) ──────────────────────────
+    evidence_dir = os.path.join(BASE_DIR, config.get('evidence_dir', 'evidence'))
+    os.makedirs(evidence_dir, exist_ok=True)
 
-    # ── 5. Sensor manager ─────────────────────────────────────────────────────
+    camera_manager = CameraManager(evidence_dir=evidence_dir)
+    logger.info("[Boot] %s", camera_manager.status_string())
+
+    audio_recorder = AudioRecorderManager(evidence_dir=evidence_dir)
+    logger.info("[Boot] %s", audio_recorder.status_string())
+
+    # ── 5. State machine — inject the shared sim + evidence recorders ──────
+    kavach = KavachStateMachine(sim=sim, cam=camera_manager, mic=audio_recorder)
+
+    # ── 6. Sensor manager ─────────────────────────────────────────────────────
     sensor_manager = SensorManager()
     sensor_manager.start()
     logger.info("[Boot] %s", sensor_manager.status_string())
 
-    # ── 6. Button handler ─────────────────────────────────────────────────────
+    # ── 7. Button handler ─────────────────────────────────────────────────────
     button = ButtonHandler(
         pin             = config['sos_button_pin'],
         on_sos_press    = _on_sos,
@@ -444,17 +651,26 @@ if __name__ == '__main__':
     button.start()
     logger.info("[Boot] Button handler started on pin %d.", config['sos_button_pin'])
 
-    # ── 7. Audio detection ────────────────────────────────────────────────────
+    # ── 8. Audio detection ────────────────────────────────────────────────────
     audio_manager = AudioManager()
     audio_manager.start(on_detection=_on_audio_detection)
     logger.info("[Boot] %s", audio_manager.status_string())
 
-    # ── 8. LoRa off-grid backup ───────────────────────────────────────────────
+    # ── 9. LoRa off-grid backup ───────────────────────────────────────────────
     lora_manager = LoRaManager()
     lora_manager.start(on_packet_received=_on_lora_packet)
     logger.info("[Boot] %s", lora_manager.status_string())
 
-    # ── 9. IMU + Heart rate monitor threads ───────────────────────────────────
+    # ── 10. Config sync (polls server for app-pushed config changes) ─────────
+    threading.Thread(
+        target=_config_poll_loop,
+        args=(config,),
+        name="ConfigSync",
+        daemon=True
+    ).start()
+    logger.info("[Boot] Config sync thread started (polling every %ds).", CONFIG_POLL_INTERVAL)
+
+    # ── 11. IMU + Heart rate monitor threads ──────────────────────────────────
     threading.Thread(
         target=_imu_monitor,
         args=(sensor_manager,),
@@ -469,7 +685,25 @@ if __name__ == '__main__':
     ).start()
     logger.info("[Boot] Sensor monitor threads started.")
 
-    # ── 10. Ready ─────────────────────────────────────────────────────────────
+    # ── 12. Keyboard demo (desktop only — skipped on Pi) ────────────────────
+    try:
+        import RPi.GPIO  # noqa: F401
+        _on_pi = True
+    except (ImportError, RuntimeError):
+        _on_pi = False
+
+    if not _on_pi:
+        threading.Thread(
+            target=_keyboard_listener,
+            args=(sensor_manager, audio_manager),
+            name="KeyboardDemo",
+            daemon=True,
+        ).start()
+        logger.info("[Boot] Keyboard demo listener started (desktop mode).")
+    else:
+        logger.info("[Boot] Running on Pi — keyboard demo keys disabled (using real hardware).")
+
+    # ── 13. Ready ─────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info(" Kavach ARMED — %s", kavach.status_line())
     logger.info(" Triggers active:")
@@ -480,9 +714,16 @@ if __name__ == '__main__':
     logger.info("   Heart rate spike     → SOS")
     logger.info("   Audio danger sound   → SOS (YAMNet)")
     logger.info("   LoRa RX              → Mesh relay")
+    if not _on_pi:
+        logger.info(" Demo keys (desktop only):")
+        logger.info("   f=fall  h=heartrate  a=audio  s=SOS  d=MEDICAL  l=SAFE  q=quit")
+    logger.info(" Evidence capture:")
+    logger.info("   %s", camera_manager.status_string())
+    logger.info("   %s", audio_recorder.status_string())
+    logger.info(" Config sync: polling server every %ds", CONFIG_POLL_INTERVAL)
     logger.info("=" * 60)
 
-    # ── 11. Main thread sleeps — all work is in daemon threads ────────────────
+    # ── 14. Main thread sleeps — all work is in daemon threads ────────────────
     # signal.pause() is Unix-only — use a cross-platform sleep loop instead
     # so the device firmware runs identically on Windows (dev) and Pi (prod).
     try:
@@ -496,6 +737,8 @@ if __name__ == '__main__':
         sensor_manager.stop()
         audio_manager.stop()
         lora_manager.stop()
+        camera_manager.shutdown()
+        audio_recorder.shutdown()
         sim.close()   # cleanly release the serial port
         logger.info("[Boot] Kavach shutdown complete.")
         logger.info("=" * 60)

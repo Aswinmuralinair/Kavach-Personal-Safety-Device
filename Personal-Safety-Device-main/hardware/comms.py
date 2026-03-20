@@ -1,9 +1,10 @@
 """
 hardware/comms.py — Project Kavach
 
-SIM7600G-H driver. Handles AT commands, SMS, voice calls, GPS, and
-encrypted evidence uploads to the Kavach server. Thread-safe — all
-public methods acquire self._lock before accessing the serial port.
+SIM7600G-H driver. Handles AT commands, SMS, voice calls, GPS (with
+cell tower fallback via Unwired Labs), and encrypted evidence uploads
+to the Kavach server. Thread-safe — all public methods acquire
+self._lock before accessing the serial port.
 """
 
 import serial
@@ -89,19 +90,26 @@ class SIM7600:
         with self._lock:
             return self._send_command('AT+CHUP', 'OK', 5)[0]
 
-    # ── GPS ───────────────────────────────────────────────────────────────────
-    def get_gps_location(self):
+    # ── GPS (primary) + Cell Tower fallback ──────────────────────────────────
+    def get_gps_location(self, api_token: str = None):
         """
         Returns a raw coordinate string "lat,lon" (e.g. "12.9716,77.5946"),
-        or None if no fix could be obtained. alerts.py builds the Google Maps
-        URL from these raw coordinates via _build_maps_link().
+        or None if no location could be obtained.
+
+        Location strategy (two-tier):
+          1. GPS via AT+CGPS — accurate to ~3 m (needs sky view, may take 30+ s)
+          2. Cell tower via AT+CPSI? + Unwired Labs API — accurate to ~200-500 m
+             (works indoors, needs internet + api_token from config.json)
+
+        alerts.py builds the Google Maps URL from raw coordinates via _build_maps_link().
         """
         if not self.ser:
             return None
 
         with self._lock:
+            # ── Tier 1: GPS satellite fix ─────────────────────────────────────
             self._send_command('AT+CGPS=1,1', 'OK', 1)
-            logger.info("[SIM7600] Acquiring GPS fix...")
+            logger.info("[SIM7600] Tier 1 — Acquiring GPS fix...")
 
             coordinates = None
             for _ in range(15):
@@ -127,17 +135,124 @@ class SIM7600:
                         continue
                 time.sleep(2)
 
-            if not coordinates:
-                logger.warning("[SIM7600] Failed to get GPS fix after 15 attempts.")
-
             self._send_command('AT+CGPS=0', 'OK', 1)
+
+            if coordinates:
+                return coordinates
+
+            # ── Tier 2: Cell tower fallback via Unwired Labs ──────────────────
+            logger.warning("[SIM7600] GPS failed after 15 attempts — trying cell tower fallback.")
+            coordinates = self._cell_tower_locate(api_token)
+
         return coordinates
+
+    def _cell_tower_locate(self, api_token: str = None) -> str:
+        """
+        Reads the serving cell tower info via AT+CPSI? and queries the
+        Unwired Labs Geolocation API to get an approximate lat/lon.
+
+        AT+CPSI? response format (LTE example):
+          +CPSI: LTE,Online,404-30,0x1234,12345678,100,EUTRAN-BAND40,38950,...
+
+        Fields: mode, status, MCC-MNC, LAC_hex, CellID, ...
+
+        Returns "lat,lon" string or None on failure.
+        """
+        if not api_token:
+            logger.warning("[SIM7600] No api_token configured — cell tower fallback skipped.")
+            return None
+
+        # Read serving cell info from SIM7600
+        success, response = self._send_command('AT+CPSI?', '+CPSI:', 3)
+        if not success:
+            logger.warning("[SIM7600] AT+CPSI? failed — no cell tower info.")
+            return None
+
+        try:
+            # Parse: +CPSI: LTE,Online,404-30,0x1234,12345678,...
+            cpsi_line = response.split('+CPSI:')[1].strip().split('\r')[0]
+            fields    = [f.strip() for f in cpsi_line.split(',')]
+
+            if len(fields) < 5:
+                logger.warning("[SIM7600] AT+CPSI? response too short: %s", cpsi_line)
+                return None
+
+            # fields[0] = mode (LTE/WCDMA/GSM)
+            # fields[2] = MCC-MNC (e.g. "404-30")
+            # fields[3] = LAC/TAC hex (e.g. "0x1234")
+            # fields[4] = CellID (decimal or hex)
+            mcc_mnc = fields[2]
+            mcc, mnc = mcc_mnc.split('-')
+
+            # LAC/TAC — strip 0x prefix if present
+            lac_str = fields[3]
+            lac = int(lac_str, 16) if lac_str.startswith('0x') else int(lac_str)
+
+            # CellID — may be decimal or hex
+            cid_str = fields[4]
+            cid = int(cid_str, 16) if cid_str.startswith('0x') else int(cid_str)
+
+            logger.info(
+                "[SIM7600] Cell tower: MCC=%s MNC=%s LAC=%d CID=%d",
+                mcc, mnc, lac, cid
+            )
+        except (ValueError, IndexError) as exc:
+            logger.error("[SIM7600] Failed to parse AT+CPSI? response: %s", exc)
+            return None
+
+        # Query Unwired Labs Geolocation API
+        try:
+            payload = {
+                "token": api_token,
+                "radio": fields[0].lower(),   # "lte", "gsm", "wcdma"
+                "mcc":   int(mcc),
+                "mnc":   int(mnc),
+                "cells": [{
+                    "lac": lac,
+                    "cid": cid,
+                }],
+            }
+
+            r = requests.post(
+                "https://us1.unwiredlabs.com/v2/process.php",
+                json=payload,
+                timeout=10,
+            )
+
+            result = r.json()
+            if result.get("status") == "ok":
+                lat = result["lat"]
+                lon = result["lon"]
+                accuracy = result.get("accuracy", "unknown")
+                coordinates = f"{lat},{lon}"
+                logger.info(
+                    "[SIM7600] Cell tower location: %s (accuracy ~%s m)",
+                    coordinates, accuracy
+                )
+                return coordinates
+            else:
+                logger.warning(
+                    "[SIM7600] Unwired Labs API error: %s",
+                    result.get("message", "unknown error")
+                )
+                return None
+
+        except Exception as exc:
+            logger.error("[SIM7600] Cell tower API request failed: %s", exc)
+            return None
 
     # ── Evidence upload ───────────────────────────────────────────────────────
     def upload_alert(self, server_url, alert_object, file_path):
         """
-        Encrypts the alert telemetry with ChaCha20-Poly1305 and uploads it
-        together with an evidence file to the Kavach server.
+        Encrypts the alert telemetry AND evidence file with ChaCha20-Poly1305,
+        computes a SHA-256 hash of the original file for server-side integrity
+        verification, and uploads everything to the Kavach server.
+
+        Upload fields sent:
+          encrypted_payload  — base64-encoded ChaCha20 encrypted JSON telemetry
+          file               — ChaCha20 encrypted evidence file bytes
+          file_encrypted     — "true" (tells server to decrypt the file)
+          file_sha256        — SHA-256 hex digest of the ORIGINAL file (pre-encryption)
 
         Returns (True, server_filename) on success, (False, None) on failure.
         """
@@ -159,8 +274,10 @@ class SIM7600:
                 'battery_percentage':  alert_object.battery_percentage,
             }
 
-            # Encrypt before sending
-            from crypto_utils import chacha_encrypt_text
+            # Encrypt telemetry JSON
+            from crypto_utils import chacha_encrypt_text, chacha_encrypt_bytes
+            import hashlib
+
             payload_json  = json.dumps(payload_dict)
             encrypted     = chacha_encrypt_text(payload_json)
             encrypted_b64 = base64.b64encode(encrypted).decode()
@@ -172,14 +289,37 @@ class SIM7600:
                 payload_dict['battery_percentage'],
             )
 
+            # Read, hash, and encrypt the evidence file
             with open(file_path, 'rb') as f:
-                files = {'file': (os.path.basename(file_path), f)}
-                r = requests.post(
-                    server_url,
-                    files=files,
-                    data={'encrypted_payload': encrypted_b64},
-                    timeout=30,
-                )
+                raw_file_bytes = f.read()
+
+            # SHA-256 of the ORIGINAL file (before encryption) for server verification
+            file_hash = hashlib.sha256(raw_file_bytes).hexdigest()
+
+            # Encrypt the evidence file with ChaCha20-Poly1305
+            encrypted_file_bytes = chacha_encrypt_bytes(raw_file_bytes)
+
+            logger.info(
+                "[SIM7600] Evidence encrypted: %s (%d → %d bytes, hash=%s...)",
+                os.path.basename(file_path),
+                len(raw_file_bytes),
+                len(encrypted_file_bytes),
+                file_hash[:16],
+            )
+
+            import io
+            encrypted_file_obj = io.BytesIO(encrypted_file_bytes)
+            files = {'file': (os.path.basename(file_path), encrypted_file_obj)}
+            r = requests.post(
+                server_url,
+                files=files,
+                data={
+                    'encrypted_payload': encrypted_b64,
+                    'file_encrypted':    'true',
+                    'file_sha256':       file_hash,
+                },
+                timeout=30,
+            )
 
             if r.status_code == 201:
                 logger.info("[SIM7600] Uploaded %s.", os.path.basename(file_path))

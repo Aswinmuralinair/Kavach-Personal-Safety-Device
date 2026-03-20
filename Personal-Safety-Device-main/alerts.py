@@ -143,7 +143,7 @@ def _run_update_loop(
         sim.send_sms(config['guardian_number'], f"[Kavach {alert_label}] Battery: {battery_str}")
 
         # 2. GPS — comms.py returns raw "lat,lon"; build the Maps link here
-        location = sim.get_gps_location()
+        location = sim.get_gps_location(api_token=config.get('api_token'))
         ts = _ist_timestamp()
         if location:
             maps_link = _build_maps_link(location)
@@ -202,17 +202,29 @@ def _run_update_loop(
 # 1. SOS SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
+def sos_sequence(sim: SIM7600, trigger_source: str = "button",
+                 cam=None, mic=None) -> None:
     """
     Full SOS pipeline:
-      1. Calls police (config['police_number'])
-      2. SMS guardian: "SOS ALERT" + Google Maps link
-      3. Enters 60-second GPS + evidence upload loop until safe_sequence() fires
+      1. Starts camera + microphone evidence recording
+      2. Calls police (config['police_number'])
+      3. SMS guardian: "SOS ALERT" + Google Maps link
+      4. Enters 60-second GPS + evidence upload loop until safe_sequence() fires
 
     `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
+    `cam` is the CameraManager from main.py (None = no video recording).
+    `mic` is the AudioRecorderManager from main.py (None = no audio recording).
     """
     _stop_alert_event.clear()
     logger.info("[SOS] ACTIVATED — trigger: %s", trigger_source)
+
+    # ── Step 0: Start evidence capture immediately ────────────────────────
+    if cam:
+        cam.start_recording()
+        logger.info("[SOS] Camera recording started.")
+    if mic:
+        mic.start_recording()
+        logger.info("[SOS] Audio recording started.")
 
     config        = _load_config()
     power_monitor = _init_power_monitor()
@@ -247,7 +259,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
 
     # ── Step 3: Immediate GPS fix + Maps link ─────────────────────────────────
     logger.info("[SOS] Step 3 — Sending GPS location.")
-    location = sim.get_gps_location()
+    location = sim.get_gps_location(api_token=config.get('api_token'))
     if location:
         maps_link = _build_maps_link(location)
         alert_row.gps_location = location
@@ -282,17 +294,28 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button") -> None:
 # 2. MEDICAL ALERT SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def medical_sequence(sim: SIM7600) -> None:
+def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
     """
     Medical emergency pipeline:
+      0. Starts camera + microphone evidence recording
       1. Calls ambulance / medical contact (config['medical_number'])
       2. SMS guardian AND medical contact: "MEDICAL EMERGENCY" + Google Maps link
       3. Enters the same 60-second GPS + evidence upload loop, tagged "MEDICAL"
 
     `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
+    `cam` is the CameraManager from main.py (None = no video recording).
+    `mic` is the AudioRecorderManager from main.py (None = no audio recording).
     """
     _stop_alert_event.clear()
     logger.info("[MEDICAL] ACTIVATED — double press.")
+
+    # ── Step 0: Start evidence capture immediately ────────────────────────
+    if cam:
+        cam.start_recording()
+        logger.info("[MEDICAL] Camera recording started.")
+    if mic:
+        mic.start_recording()
+        logger.info("[MEDICAL] Audio recording started.")
 
     config        = _load_config()
     power_monitor = _init_power_monitor()
@@ -319,7 +342,7 @@ def medical_sequence(sim: SIM7600) -> None:
 
     # ── Step 2: Immediate GPS fix ─────────────────────────────────────────────
     logger.info("[MEDICAL] Step 2 — Getting GPS fix.")
-    location  = sim.get_gps_location()
+    location  = sim.get_gps_location(api_token=config.get('api_token'))
     maps_link = _build_maps_link(location) if location else "GPS unavailable"
     if location:
         alert_row.gps_location        = location
@@ -369,18 +392,30 @@ def medical_sequence(sim: SIM7600) -> None:
 # 3. SAFE SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def safe_sequence(sim: SIM7600, was_active_type: str = None) -> None:
+def safe_sequence(sim: SIM7600, was_active_type: str = None,
+                  cam=None, mic=None) -> None:
     """
     'I am safe' pipeline:
+      - Stops camera + microphone evidence recording
       - Stops the running SOS/MEDICAL loop immediately via _stop_alert_event
       - SMS guardian: "I AM SAFE" confirmation
       - SMS police cancellation if SOS was active (to prevent false response)
 
     `sim` is the shared SIM7600 instance from main.py — do NOT construct a new one here.
     `was_active_type` is passed from KavachStateMachine so we know what to cancel.
+    `cam` is the CameraManager from main.py (None = no video recording).
+    `mic` is the AudioRecorderManager from main.py (None = no audio recording).
     """
     logger.info("[SAFE] Long press detected — sending SAFE alert.")
     config = _load_config()
+
+    # ── Stop evidence recording ───────────────────────────────────────────────
+    if cam:
+        cam.stop_recording()
+        logger.info("[SAFE] Camera recording stopped.")
+    if mic:
+        mic.stop_recording()
+        logger.info("[SAFE] Audio recording stopped.")
 
     # ── Cancel any running alert loop ─────────────────────────────────────────
     if was_active_type:
