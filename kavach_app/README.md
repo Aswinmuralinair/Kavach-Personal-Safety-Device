@@ -11,8 +11,11 @@ Flutter mobile app for the Kavach Personal Safety Device. Connects to the Kavach
 
 ## Features
 
-- **Live device status** — Dashboard polls device battery every 60 seconds, shows "Device Online" or "Device Offline"
-- **Alert detail** — GPS location on map, call/SMS status, battery, evidence files with SHA-256 integrity badges (Verified/Tampered/Unchecked)
+- **Push notifications** — Polls every 5 seconds for new alerts, shows Android notification with sound when SOS/MEDICAL detected
+- **Splash screen** — Animated Kavach logo with "Your Safety, Our Priority" caption on launch
+- **Custom launcher icon** — Kavach logo on Android home screen (via flutter_launcher_icons)
+- **Live device status** — Dashboard polls device battery every 10 seconds, shows "Device Online" or "Device Offline"
+- **Alert detail** — GPS location on map (coordinates rounded to 6 decimal places), call/SMS status, battery, evidence files with SHA-256 integrity badges
 - **Evidence viewer** — Opens evidence files via signed download URLs (1-hour expiry, no auth headers needed in browser)
 - **Location history** — Map view of all GPS coordinates from alert updates
 - **Remote config** — Change police, guardian, medical, and WhatsApp numbers from the app (syncs to Pi via server)

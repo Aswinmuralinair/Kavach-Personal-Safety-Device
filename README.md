@@ -29,12 +29,12 @@ When you run `python main.py` on the Pi, it starts 10 subsystems simultaneously:
 2. **IMU** (BNO055 via I2C) — checks for falls 10 times/second
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
-5. **Pi Camera** (CSI interface via picamera2) — records 30-second H264 evidence clips during alerts
-6. **Microphone Recorder** (sounddevice) — records 30-second WAV audio evidence during alerts
+5. **Pi Camera** (CSI interface via rpicam-vid) — records 60-second MP4 evidence clips during alerts
+6. **Microphone Recorder** (sounddevice) — records 60-second WAV audio evidence during alerts
 7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
-8. **Config Sync** — polls server every 60s for config changes + sends battery heartbeat
+8. **Config Sync** — polls server every 10s for config changes + sends battery heartbeat
 9. **Power Monitor** (INA219 via I2C) — reads battery voltage for heartbeat reporting
-10. **Keyboard** — `f`, `h`, `a`, `s`, `d`, `l`, `q` keys to simulate sensors without hardware (for demos)
+10. **Keyboard** — `f`, `h`, `a`, `s`, `d`, `l`, `q` keys to simulate sensors (works on Pi and desktop)
 
 If any sensor hardware is not connected, the code **auto-detects** and falls back to a simulator that does nothing until triggered by keyboard.
 
@@ -53,7 +53,7 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 ### SOS Sequence
 
 ```
-Step 1 → START CAMERA + MICROPHONE RECORDING (30-sec video + audio clips to evidence/)
+Step 1 → START CAMERA + MICROPHONE RECORDING (60-sec video + audio clips to evidence/)
 Step 2 → CALL POLICE (rings 15 seconds, hangs up)
 Step 3 → SMS to guardian: "SOS ALERT - Emergency triggered"
 Step 4 → WhatsApp alert: location + help message (via CallMeBot)
@@ -161,7 +161,7 @@ cd Personal-Safety-Device-main
 pip install SQLAlchemy requests pyserial cryptography numpy sounddevice RPi.GPIO smbus2 spidev adafruit-circuitpython-bno055 adafruit-circuitpython-busdevice tensorflow
 ```
 
-> **Note:** `picamera2` is pre-installed on Raspberry Pi OS. If missing: `sudo apt install python3-picamera2`
+> **Note:** Camera uses `rpicam-vid` (pre-installed on Raspberry Pi OS). Also install PortAudio: `sudo apt-get install libportaudio2 portaudio19-dev`
 
 ### 3. Set Up ngrok (Remote Access — Pi and Server on different networks)
 
@@ -302,7 +302,7 @@ Triggers active:
   Microphone           → Audio evidence recording during alerts
   LoRa RX              → Mesh relay
 
-Keyboard shortcuts (desktop demo — sensors without hardware):
+Keyboard shortcuts (works on Pi and desktop):
   f → Fall detected      h → Heart rate spike
   a → Audio danger       s → SOS (button press)
   d → MEDICAL (double press)  l → SAFE (long press)
@@ -353,8 +353,8 @@ Kavach/
 │   │   ├── sensors.py              ← BNO055 (IMU/fall) + MAX30102 (heart rate)
 │   │   ├── audio.py                ← YAMNet microphone listener
 │   │   ├── button.py               ← GPIO button with single/double/long press
-│   │   ├── camera.py               ← Pi Camera: 30-sec H264 clip recording
-│   │   ├── audio_recorder.py       ← Microphone: 30-sec WAV clip recording
+│   │   ├── camera.py               ← Pi Camera: 60-sec MP4 clip recording (rpicam-vid)
+│   │   ├── audio_recorder.py       ← Microphone: 60-sec WAV clip recording
 │   │   ├── whatsapp.py             ← CallMeBot WhatsApp API wrapper
 │   │   ├── lora.py                 ← SX1278 LoRa mesh radio
 │   │   └── power.py                ← INA219 battery voltage monitor
@@ -399,13 +399,12 @@ Kavach/
 
 ### 1. Admin Web Dashboard
 Open `https://your-name.ngrok-free.dev/` (or `http://localhost:8080/`) to see:
-- **Admin login** — username/password required to access the dashboard
-- **Light modern theme** — clean white design with color-coded stats
+- **Admin login** — username/password required to access the dashboard (with splash screen and Kavach logo)
+- **Dark theme** — modern dark design with cyan accent and color-coded stats
 - **Stats bar** — total alerts, SOS count, medical count, active devices, evidence files
-- **Live map** — Leaflet.js + OpenStreetMap with colored markers (red=SOS, purple=MEDICAL, blue=other)
-- **Recent alerts table** — top 10 alerts with clickable GPS and evidence links
-- **All alerts table** — full table with detailed info (tabbed view)
-- **Evidence gallery** — visual grid of uploaded evidence files with thumbnails, file type tags, and download links. Filterable by type (images, videos, audio)
+- **Live map** — Leaflet.js + CartoDB dark tiles with colored markers (red=SOS, purple=MEDICAL, blue=other)
+- **Active Devices panel** — click a device to expand its alerts, click an alert to see detail with GPS, battery, call/SMS status, and evidence files (Open/Save buttons)
+- **All Alerts table** — full table with trigger type badges (SOS Button, Fall Detected, Heart Rate Spike, Danger Sound, etc.)
 - **Auto-refresh** every 30 seconds
 - **Sign Out** button in header
 
@@ -428,7 +427,7 @@ REST API endpoints used by the Kavach Flutter app:
 Tokens are signed with itsdangerous (bundled with Flask) and expire after 24 hours. Passwords are hashed with pbkdf2 (via werkzeug).
 
 ### 3. Audio Evidence Recording
-During SOS/MEDICAL alerts, the microphone records 30-second `.wav` clips alongside camera video:
+During SOS/MEDICAL alerts, the microphone records 60-second `.wav` clips alongside camera video:
 - 16 kHz mono, 16-bit PCM
 - Saved to `evidence/` folder
 - Encrypted and uploaded with other evidence files
@@ -482,8 +481,8 @@ During SOS and MEDICAL alerts:
 | # | Change | Details |
 |---|--------|---------|
 | 1 | Admin login required for dashboard | Username/password authentication. Default: `admin`/`kavach2026`. Configurable via env vars |
-| 2 | Light theme dashboard | Redesigned with clean white/light-gray theme, modern cards, and better readability |
-| 3 | Evidence gallery | New tabbed "Evidence Files" view with thumbnails, file type tags, and filter by type |
+| 2 | Dark theme dashboard | Redesigned with dark theme, cyan accents, Active Devices panel with expandable alerts |
+| 3 | Evidence per alert | Evidence files shown inline per alert (click device → expand alerts → click alert → see evidence) |
 | 4 | One-click `start.bat` launcher | Creates venv, installs deps, starts Flask + ngrok + opens browser automatically |
 | 5 | Sign Out button | Header logout link to end admin session |
 
@@ -531,9 +530,30 @@ During SOS and MEDICAL alerts:
 | 1 | **Server route authentication** | `GET /api/alerts`, `/api/alerts/<id>` now require admin session or Bearer token. `GET /uploads/<file>` requires session, token, or signed download URL. `GET /api/device/config/<id>` requires `X-Device-Key` header. No data routes are publicly accessible |
 | 2 | **Signed evidence download URLs** | Evidence URLs returned by the API include a 1-hour signed token (`?token=xxx`). Allows the app to open files in an external browser without needing auth headers |
 | 3 | **Device key authentication** | Pi sends `X-Device-Key` header when polling `/api/device/config`. Server validates against `KAVACH_DEVICE_KEY` env var (default: `kavach-device-key-2026`). Added `device_key` field to `config.json` |
-| 4 | **Battery heartbeat** | Pi sends `X-Battery` header (e.g. `85%`) with every config poll (every 60s). Server stores battery + last-seen timestamp in memory per device |
+| 4 | **Battery heartbeat** | Pi sends `X-Battery` header (e.g. `85%`) with every config poll (every 10s). Server stores battery + last-seen timestamp in memory per device |
 | 5 | **Live device status endpoint** | New `GET /api/device/status/<device_id>` returns battery percentage + online/offline. Device is "offline" if no heartbeat in 2 minutes |
 | 6 | **Live battery on app dashboard** | User dashboard now shows "Device Online/Offline" with live battery percentage instead of server uptime. Polls every 60 seconds. Shows "No heartbeat received" when device is offline |
 | 7 | **Battery display fix** | Removed double `%%` bug in dashboard HTML and Flutter alert detail screen. Battery is stored as `"85%"` (string with `%`), so UI no longer appends an extra `%` |
 | 8 | **WhatsApp integration** | All alert sequences (SOS, MEDICAL, SAFE) now send WhatsApp messages via CallMeBot. Low-battery WhatsApp alert at 15% (once per boot). Silently skips if not configured |
 | 9 | **API token guard** | Cell tower fallback in `comms.py` skips gracefully if `api_token` starts with `YOUR_` (placeholder detection) |
+
+---
+
+## Changes (v3.5) — Dark Theme, Notifications, Camera Fix
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | **Dark theme dashboard** | Complete redesign: dark background, cyan accents, Kavach logo, splash screen on login |
+| 2 | **Active Devices panel** | Replaced "Recent Alerts" with device-centric view. Click device → expand alerts → click alert → inline detail with GPS, battery, call/SMS status, and evidence files |
+| 3 | **Trigger name badges** | Friendly names: SOS Button, Fall Detected, Heart Rate Spike, Danger Sound, LoRa Mesh Relay, SOS Trigger (keyboard) |
+| 4 | **App push notifications** | `flutter_local_notifications` polls every 5 seconds. Shows notification with sound when new SOS/MEDICAL alert arrives |
+| 5 | **App splash screen** | Animated Kavach logo with "Your Safety, Our Priority" caption on app launch |
+| 6 | **Custom launcher icon** | Kavach logo replaces default Flutter icon on Android home screen |
+| 7 | **Camera fix (rpicam-vid)** | Replaced picamera2 with `rpicam-vid` subprocess for Pi Camera recording. 60-second MP4 clips |
+| 8 | **Audio recording 60s** | Audio clips increased from 30s to 60s |
+| 9 | **Config poll 10s** | Device polls server every 10 seconds (was 60s) for faster config sync and battery heartbeat |
+| 10 | **Keyboard on Pi** | Keyboard demo keys (f/h/a/s/d/l/q) now work on Pi alongside GPIO buttons for remote testing |
+| 11 | **YAMNet fix** | Fixed download URL (403 error) and audio buffer size (15600 samples, not 16000) |
+| 12 | **Evidence file auth fix** | Guardian app now uses signed download URLs. Removed `canLaunchUrl` check for Android 11+ compatibility |
+| 13 | **start.sh for Pi** | Automated setup script: installs PortAudio, creates venv, pip install, downloads YAMNet, generates key, launches device |
+| 14 | **GPS display fix** | Coordinates rounded to 6 decimal places in app UI |

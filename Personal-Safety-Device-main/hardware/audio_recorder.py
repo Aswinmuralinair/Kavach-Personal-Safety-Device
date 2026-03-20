@@ -1,7 +1,7 @@
 """
 hardware/audio_recorder.py — Project Kavach
 
-Records 30-second .wav audio clips during active alerts for evidence.
+Records 60-second .wav audio clips during active alerts for evidence.
 
 Architecture (same Real/Fake pattern as camera.py):
   - RealAudioRecorder  — captures mic input via sounddevice, writes .wav files
@@ -10,7 +10,7 @@ Architecture (same Real/Fake pattern as camera.py):
 
 Recording behaviour:
   - When an alert fires (SOS / MEDICAL), start_recording() is called.
-  - Records 30-second .wav clips into the evidence/ folder.
+  - Records 60-second .wav clips into the evidence/ folder.
   - The existing 60-second upload loop in alerts.py picks up new files.
   - When safe_sequence() fires (long press), stop_recording() is called.
 
@@ -37,7 +37,7 @@ DTYPE       = 'int16' # 16-bit PCM
 class BaseAudioRecorder(ABC):
     @abstractmethod
     def start_recording(self) -> None:
-        """Begin recording 30-second wav clips to evidence/ folder."""
+        """Begin recording 60-second wav clips to evidence/ folder."""
 
     @abstractmethod
     def stop_recording(self) -> None:
@@ -50,11 +50,11 @@ class BaseAudioRecorder(ABC):
 
 class RealAudioRecorder(BaseAudioRecorder):
     """
-    Records 30-second .wav clips using sounddevice.
+    Records 60-second .wav clips using sounddevice.
     All recording happens on a dedicated daemon thread.
     """
 
-    def __init__(self, evidence_dir: str, clip_duration: int = 30):
+    def __init__(self, evidence_dir: str, clip_duration: int = 60):
         self._evidence_dir  = evidence_dir
         self._clip_duration = clip_duration
         self._recording     = False
@@ -182,7 +182,7 @@ class AudioRecorderManager:
         rec.shutdown()          # device shutdown
     """
 
-    def __init__(self, evidence_dir: str, clip_duration: int = 30):
+    def __init__(self, evidence_dir: str, clip_duration: int = 60):
         self._recorder = self._detect(evidence_dir, clip_duration)
 
     @staticmethod

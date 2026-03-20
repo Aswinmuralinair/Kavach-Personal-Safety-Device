@@ -34,12 +34,12 @@ CONCURRENT TRIGGER THREADS (all run from boot, daemon threads):
   Thread 5: LoRaRX             — continuous SX1278 receive loop
 
 EVIDENCE CAPTURE (started/stopped per alert, daemon threads):
-  CameraManager        — 30-second H264 clips via Pi Camera / FakeCameraRecorder
-  AudioRecorderManager — 30-second WAV clips via microphone / FakeAudioRecorder
+  CameraManager        — 60-second MP4 clips via rpicam-vid / FakeCameraRecorder
+  AudioRecorderManager — 60-second WAV clips via microphone / FakeAudioRecorder
 
 BACKGROUND SERVICES (daemon threads):
-  ConfigSync           — polls server every 60s for config changes + sends battery heartbeat
-  KeyboardDemo         — (desktop only) listens for f/h/a/s/d/l/q demo keys
+  ConfigSync           — polls server every 10s for config changes + sends battery heartbeat
+  KeyboardDemo         — listens for f/h/a/s/d/l/q demo keys (works on Pi and desktop)
 
 FIX applied (serial port conflict):
   A single SIM7600 instance is created once at boot (step 3) and stored on
