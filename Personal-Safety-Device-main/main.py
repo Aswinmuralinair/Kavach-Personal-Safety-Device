@@ -306,7 +306,6 @@ def _config_poll_loop(config: dict, power_monitor=None) -> None:
     syncable_keys = {'police_number', 'guardian_number', 'medical_number', 'whatsapp_number'}
 
     while True:
-        time.sleep(CONFIG_POLL_INTERVAL)
         try:
             import requests
             battery_str = _read_battery(power_monitor)
@@ -353,6 +352,8 @@ def _config_poll_loop(config: dict, power_monitor=None) -> None:
 
         except Exception as exc:
             logger.debug("[ConfigSync] Poll failed (server may be offline): %s", exc)
+
+        time.sleep(CONFIG_POLL_INTERVAL)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
