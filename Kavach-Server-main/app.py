@@ -61,10 +61,11 @@ app.config['MAX_CONTENT_LENGTH']             = 64 * 1024 * 1024   # 64 MB max up
 
 DB.init_app(app)
 
-UPLOAD_DIR = os.path.join(os.getcwd(), 'uploads')
+_APP_DIR   = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(_APP_DIR, 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-CONFIG_DIR = os.path.join(os.getcwd(), 'device_configs')
+CONFIG_DIR = os.path.join(_APP_DIR, 'device_configs')
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
 

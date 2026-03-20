@@ -547,8 +547,8 @@ class LoRaSimulator(BaseLoRa):
     Software simulation of the LoRa radio for desktop/laptop testing.
 
     TX: logs the packet as if it was transmitted.
-    RX: fires a simulated relay packet every ~120 seconds so you can
-        test the full receive pipeline without real hardware.
+    RX: fires a simulated SOS packet every ~120 seconds so you can
+        test the full receive + relay pipeline without real hardware.
 
     Call lora_manager.simulate_receive("SOS") to inject a fake incoming
     packet immediately during testing.
@@ -607,9 +607,10 @@ class LoRaSimulator(BaseLoRa):
                 self._pending_rx = None
                 logger.info("[LoRaSimulator] Manual RX inject: %s", packet)
             else:
-                # Auto-generate a simulated relay packet
+                # Auto-generate a simulated SOS packet so the main handler's
+                # SOS/MEDICAL/SAFE relay logic is exercised during testing
                 packet = LoRaPacket(
-                    packet_type="RELAY",
+                    packet_type="SOS",
                     device_id="KAVACH-SIM-002",
                     trigger="auto_simulation",
                     gps_location="12.9716,77.5946",   # Bangalore coords
@@ -617,7 +618,7 @@ class LoRaSimulator(BaseLoRa):
                     timestamp=datetime.now(timezone.utc).isoformat(),
                     hop_count=1,
                 )
-                logger.info("[LoRaSimulator] AUTO RX: simulated relay packet.")
+                logger.info("[LoRaSimulator] AUTO RX: simulated SOS packet.")
 
             self._rx_count += 1
             if self._rx_callback:
