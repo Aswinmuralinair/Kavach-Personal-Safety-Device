@@ -54,13 +54,33 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
     return LatLng(lat, lon);
   }
 
+  /// Round GPS coordinates to 6 decimal places for clean display.
+  String _formatGps(dynamic loc) {
+    if (loc == null) return 'No GPS data';
+    final s = loc.toString();
+    if (!s.contains(',')) return s;
+    final parts = s.split(',');
+    final lat = double.tryParse(parts[0].trim());
+    final lon = double.tryParse(parts[1].trim());
+    if (lat == null || lon == null) return s;
+    return '${lat.toStringAsFixed(6)}, ${lon.toStringAsFixed(6)}';
+  }
+
   void _openEvidence(String publicUrl) async {
     // publicUrl comes from the server with a signed download token already
     // appended (e.g. "/uploads/file.wav?token=xxx"), so we just prepend the
     // base URL. The token gives time-limited access without needing headers.
-    final url = '${ApiService.baseUrl}$publicUrl';
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    final uri = Uri.parse('${ApiService.baseUrl}$publicUrl');
+    // Try to launch directly — skip canLaunchUrl which can fail on Android 11+
+    // even with queries declared, due to ngrok interstitial pages.
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not open evidence file')),
+        );
+      }
     }
   }
 
@@ -181,7 +201,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                 _DetailRow(
                   icon: Icons.my_location,
                   label: 'GPS',
-                  value: _alert?['gps_location'] ?? 'No GPS data',
+                  value: _formatGps(_alert?['gps_location']),
                 ),
               ],
             ),

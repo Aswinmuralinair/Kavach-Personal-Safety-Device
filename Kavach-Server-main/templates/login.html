@@ -9,7 +9,7 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f0f2f5;
+            background: #0a0c10;
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -18,50 +18,56 @@
 
         .login-container {
             width: 100%;
-            max-width: 400px;
+            max-width: 420px;
             padding: 20px;
         }
 
         .login-card {
-            background: #fff;
-            border-radius: 16px;
-            padding: 40px 36px;
-            box-shadow: 0 2px 16px rgba(0,0,0,0.06);
+            background: #1a1d27;
+            border: 1px solid #2a2d37;
+            border-radius: 20px;
+            padding: 44px 36px;
+            box-shadow: 0 4px 30px rgba(0,0,0,0.4);
         }
 
         .logo {
             text-align: center;
-            margin-bottom: 32px;
+            margin-bottom: 36px;
         }
 
         .logo-icon {
-            width: 56px;
-            height: 56px;
-            background: linear-gradient(135deg, #4f46e5, #7c3aed);
-            border-radius: 14px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
+            width: 80px;
+            height: 80px;
+            border-radius: 20px;
+            overflow: hidden;
+            display: inline-block;
             margin-bottom: 16px;
+            box-shadow: 0 0 40px rgba(0,188,212,0.2);
         }
 
-        .logo-icon svg {
-            width: 28px;
-            height: 28px;
-            fill: white;
+        .logo-icon img {
+            width: 100%; height: 100%; object-fit: cover;
         }
 
         .logo h1 {
-            font-size: 24px;
-            font-weight: 700;
-            color: #1a1a2e;
-            letter-spacing: -0.5px;
+            font-size: 28px;
+            font-weight: 800;
+            color: #fff;
+            letter-spacing: 6px;
+            text-transform: uppercase;
+        }
+
+        .logo .caption {
+            font-size: 13px;
+            color: #00bcd4;
+            margin-top: 6px;
+            letter-spacing: 0.5px;
         }
 
         .logo p {
-            font-size: 14px;
+            font-size: 13px;
             color: #6b7280;
-            margin-top: 4px;
+            margin-top: 16px;
         }
 
         .form-group {
@@ -72,42 +78,44 @@
             display: block;
             font-size: 13px;
             font-weight: 600;
-            color: #374151;
+            color: #9ca3af;
             margin-bottom: 6px;
         }
 
         .form-group input {
             width: 100%;
             padding: 12px 14px;
-            border: 1.5px solid #e5e7eb;
+            border: 1.5px solid #2a2d37;
             border-radius: 10px;
             font-size: 14px;
-            color: #1f2937;
-            background: #f9fafb;
+            color: #e8eaed;
+            background: #0f1117;
             transition: all 0.2s;
             outline: none;
         }
 
         .form-group input:focus {
-            border-color: #4f46e5;
-            background: #fff;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+            border-color: #00bcd4;
+            background: #0f1117;
+            box-shadow: 0 0 0 3px rgba(0,188,212,0.15);
         }
 
+        .form-group input::placeholder { color: #4b5563; }
+
         .error-msg {
-            background: #fef2f2;
-            color: #dc2626;
+            background: rgba(239,68,68,0.1);
+            color: #ef4444;
             padding: 10px 14px;
             border-radius: 8px;
             font-size: 13px;
             margin-bottom: 20px;
-            border: 1px solid #fecaca;
+            border: 1px solid rgba(239,68,68,0.3);
         }
 
         .login-btn {
             width: 100%;
-            padding: 12px;
-            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            padding: 13px;
+            background: linear-gradient(135deg, #00bcd4, #7c3aed);
             color: #fff;
             border: none;
             border-radius: 10px;
@@ -115,17 +123,16 @@
             font-weight: 600;
             cursor: pointer;
             transition: opacity 0.2s;
+            letter-spacing: 0.5px;
         }
 
-        .login-btn:hover {
-            opacity: 0.9;
-        }
+        .login-btn:hover { opacity: 0.9; }
 
         .footer-text {
             text-align: center;
-            margin-top: 24px;
+            margin-top: 28px;
             font-size: 12px;
-            color: #9ca3af;
+            color: #4b5563;
         }
     </style>
 </head>
@@ -134,9 +141,11 @@
         <div class="login-card">
             <div class="logo">
                 <div class="logo-icon">
-                    <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 2.18l7 3.12v4.7c0 4.83-3.13 9.37-7 10.5-3.87-1.13-7-5.67-7-10.5V6.3l7-3.12z"/></svg>
+                    <img src="/static/kavach_logo.png" alt="Kavach"
+                         onerror="this.parentElement.innerHTML='<div style=&quot;width:80px;height:80px;background:linear-gradient(135deg,#00bcd4,#7c3aed);border-radius:20px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:32px;&quot;>K</div>'">
                 </div>
                 <h1>KAVACH</h1>
+                <div class="caption">Your Safety, Our Priority</div>
                 <p>Admin Dashboard Login</p>
             </div>
 

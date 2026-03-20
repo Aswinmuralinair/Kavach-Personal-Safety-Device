@@ -8,30 +8,31 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         :root {
-            --bg-page: #f0f2f5;
-            --bg-white: #ffffff;
-            --bg-hover: #f8f9fb;
-            --accent: #4f46e5;
-            --accent-light: #eef2ff;
-            --danger: #dc2626;
-            --danger-light: #fef2f2;
-            --danger-border: #fecaca;
-            --success: #16a34a;
-            --success-light: #f0fdf4;
-            --success-border: #bbf7d0;
+            --bg-page: #0f1117;
+            --bg-white: #1a1d27;
+            --bg-hover: #22252f;
+            --accent: #00bcd4;
+            --accent-light: rgba(0,188,212,0.1);
+            --danger: #ef4444;
+            --danger-light: rgba(239,68,68,0.1);
+            --danger-border: rgba(239,68,68,0.3);
+            --success: #22c55e;
+            --success-light: rgba(34,197,94,0.1);
+            --success-border: rgba(34,197,94,0.3);
             --warning: #f59e0b;
-            --warning-light: #fffbeb;
-            --medical: #7c3aed;
-            --medical-light: #f5f3ff;
-            --medical-border: #ddd6fe;
-            --text-primary: #111827;
-            --text-secondary: #6b7280;
-            --text-muted: #9ca3af;
-            --border: #e5e7eb;
-            --border-light: #f3f4f6;
+            --warning-light: rgba(245,158,11,0.1);
+            --medical: #a855f7;
+            --medical-light: rgba(168,85,247,0.1);
+            --medical-border: rgba(168,85,247,0.3);
+            --text-primary: #e8eaed;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --border: #2a2d37;
+            --border-light: #22252f;
             --radius: 12px;
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
-            --shadow-md: 0 2px 12px rgba(0,0,0,0.06);
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
+            --shadow-md: 0 2px 12px rgba(0,0,0,0.3);
+            --glow: 0 0 20px rgba(0,188,212,0.15);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -41,6 +42,50 @@
             background: var(--bg-page);
             color: var(--text-primary);
             min-height: 100vh;
+        }
+
+        /* ── Splash Overlay ────────────────────────────────── */
+        .splash-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #0a0c10;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.8s ease, visibility 0.8s ease;
+        }
+        .splash-overlay.hidden {
+            opacity: 0; visibility: hidden;
+        }
+        .splash-logo {
+            width: 140px; height: 140px;
+            border-radius: 28px;
+            object-fit: cover;
+            animation: splashPulse 2s ease-in-out infinite;
+            box-shadow: 0 0 60px rgba(0,188,212,0.3);
+        }
+        @keyframes splashPulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 60px rgba(0,188,212,0.3); }
+            50% { transform: scale(1.05); box-shadow: 0 0 80px rgba(0,188,212,0.5); }
+        }
+        .splash-title {
+            font-size: 42px; font-weight: 800;
+            color: #fff; margin-top: 24px;
+            letter-spacing: 8px;
+            text-transform: uppercase;
+        }
+        .splash-caption {
+            font-size: 15px; color: var(--text-secondary);
+            margin-top: 12px; letter-spacing: 1px;
+            opacity: 0;
+            animation: fadeIn 1s ease 0.5s forwards;
+        }
+        @keyframes fadeIn { to { opacity: 1; } }
+        .splash-line {
+            width: 60px; height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            margin-top: 20px;
+            animation: fadeIn 1s ease 0.8s forwards;
+            opacity: 0;
         }
 
         /* ── Header ─────────────────────────────────────── */
@@ -59,12 +104,11 @@
         }
         .header-left { display: flex; align-items: center; gap: 14px; }
         .logo-mark {
-            width: 34px; height: 34px;
-            background: linear-gradient(135deg, #4f46e5, #7c3aed);
-            border-radius: 9px;
-            display: flex; align-items: center; justify-content: center;
+            width: 36px; height: 36px;
+            border-radius: 10px;
+            overflow: hidden;
         }
-        .logo-mark svg { width: 18px; height: 18px; fill: #fff; }
+        .logo-mark img { width: 100%; height: 100%; object-fit: cover; }
         .header h1 {
             font-size: 18px;
             font-weight: 700;
@@ -157,6 +201,59 @@
         /* ── Map ────────────────────────────────────────── */
         #map { height: 420px; width: 100%; background: var(--bg-page); }
 
+        /* ── Device Cards ───────────────────────────────── */
+        .device-list { max-height: 420px; overflow-y: auto; padding: 12px; }
+        .device-list::-webkit-scrollbar { width: 5px; }
+        .device-list::-webkit-scrollbar-track { background: transparent; }
+        .device-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+        .device-card {
+            background: var(--bg-page);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .device-card:hover {
+            border-color: var(--accent);
+            box-shadow: var(--glow);
+        }
+        .device-card.expanded .device-alerts { display: block; }
+        .device-header {
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .device-name {
+            font-weight: 700; font-size: 14px; color: var(--accent);
+        }
+        .device-meta {
+            display: flex; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-secondary);
+        }
+        .device-meta span { display: flex; align-items: center; gap: 4px; }
+        .device-status {
+            display: inline-flex; align-items: center; gap: 5px;
+            font-size: 11px; font-weight: 600;
+            padding: 3px 10px; border-radius: 20px;
+        }
+        .device-status.online { background: var(--success-light); color: var(--success); }
+        .device-status.offline { background: rgba(107,114,128,0.15); color: var(--text-muted); }
+
+        .device-alerts {
+            display: none;
+            margin-top: 12px;
+            border-top: 1px solid var(--border);
+            padding-top: 10px;
+        }
+        .device-alert-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 6px 0;
+            font-size: 12px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-light);
+        }
+        .device-alert-row:last-child { border-bottom: none; }
+
         /* ── Table ──────────────────────────────────────── */
         .table-scroll { max-height: 420px; overflow-y: auto; }
         .table-scroll::-webkit-scrollbar { width: 5px; }
@@ -199,6 +296,11 @@
             background: var(--success-light); color: var(--success);
             border: 1px solid var(--success-border);
         }
+        .badge-trigger {
+            background: rgba(0,188,212,0.1); color: var(--accent);
+            border: 1px solid rgba(0,188,212,0.3);
+            font-size: 10px; padding: 2px 8px;
+        }
 
         /* ── Status dots ────────────────────────────────── */
         .status-dot {
@@ -224,12 +326,13 @@
             border-radius: 10px;
             overflow: hidden;
             transition: box-shadow 0.15s;
+            background: var(--bg-page);
         }
         .evidence-card:hover { box-shadow: var(--shadow-md); }
 
         .evidence-preview {
             height: 120px;
-            background: var(--bg-page);
+            background: #0a0c10;
             display: flex; align-items: center; justify-content: center;
             position: relative;
         }
@@ -241,13 +344,11 @@
         }
         .evidence-preview .file-type-tag {
             position: absolute; top: 8px; right: 8px;
-            background: rgba(0,0,0,0.6); color: #fff;
+            background: rgba(0,0,0,0.7); color: #fff;
             padding: 2px 8px; border-radius: 4px;
             font-size: 10px; font-weight: 600; text-transform: uppercase;
         }
-        .evidence-info {
-            padding: 10px 12px;
-        }
+        .evidence-info { padding: 10px 12px; }
         .evidence-info .name {
             font-size: 12px; font-weight: 600; color: var(--text-primary);
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -255,9 +356,7 @@
         .evidence-info .meta {
             font-size: 11px; color: var(--text-muted); margin-top: 3px;
         }
-        .evidence-info .alert-ref {
-            font-size: 11px; margin-top: 4px;
-        }
+        .evidence-info .alert-ref { font-size: 11px; margin-top: 4px; }
         .evidence-download {
             display: block; text-align: center;
             padding: 8px; border-top: 1px solid var(--border-light);
@@ -266,9 +365,7 @@
         }
         .evidence-download:hover { background: var(--accent-light); }
 
-        .evidence-filter {
-            display: flex; gap: 8px; flex-wrap: wrap;
-        }
+        .evidence-filter { display: flex; gap: 8px; flex-wrap: wrap; }
         .filter-btn {
             padding: 5px 14px; border-radius: 20px;
             border: 1px solid var(--border); background: var(--bg-white);
@@ -301,11 +398,21 @@
 </head>
 <body>
 
+    <!-- Splash Screen -->
+    <div class="splash-overlay" id="splashOverlay">
+        <img src="/static/kavach_logo.png" alt="Kavach" class="splash-logo"
+             onerror="this.style.display='none'">
+        <div class="splash-title">KAVACH</div>
+        <div class="splash-caption">Your Safety, Our Priority</div>
+        <div class="splash-line"></div>
+    </div>
+
     <!-- Header -->
     <div class="header">
         <div class="header-left">
             <div class="logo-mark">
-                <svg viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 2.18l7 3.12v4.7c0 4.83-3.13 9.37-7 10.5-3.87-1.13-7-5.67-7-10.5V6.3l7-3.12z"/></svg>
+                <img src="/static/kavach_logo.png" alt="K"
+                     onerror="this.parentElement.innerHTML='<div style=&quot;width:36px;height:36px;background:linear-gradient(135deg,#00bcd4,#7c3aed);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px;&quot;>K</div>'">
             </div>
             <h1>KAVACH</h1>
             <span class="header-badge">Admin</span>
@@ -346,7 +453,7 @@
             </div>
         </div>
 
-        <!-- Map + Recent Alerts -->
+        <!-- Map + Active Devices -->
         <div class="grid-2">
             <div class="panel">
                 <div class="panel-header">
@@ -357,13 +464,13 @@
             </div>
             <div class="panel">
                 <div class="panel-header">
-                    <span>Recent Alerts</span>
-                    <span class="sub" id="recentCount"></span>
+                    <span>Active Devices</span>
+                    <span class="sub" id="deviceCount"></span>
                 </div>
-                <div class="table-scroll" id="recentTable">
+                <div class="device-list" id="deviceList">
                     <div class="empty-state">
-                        <div class="icon">&#9203;</div>
-                        <div>Loading alerts...</div>
+                        <div class="icon">&#128225;</div>
+                        <div>Loading devices...</div>
                     </div>
                 </div>
             </div>
@@ -409,6 +516,11 @@
     </div>
 
 <script>
+    // ── Splash Screen ──────────────────────────────────────
+    setTimeout(() => {
+        document.getElementById('splashOverlay').classList.add('hidden');
+    }, 2500);
+
     // ── Tabs ──────────────────────────────────────────────
     document.querySelectorAll('.tab').forEach(tab => {
         tab.addEventListener('click', () => {
@@ -433,18 +545,18 @@
 
     // ── Map ──────────────────────────────────────────────
     const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([20.5937, 78.9629], 5);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
     const markers = L.layerGroup().addTo(map);
 
     function makeIcon(color) {
         return L.divIcon({
-            html: `<div style="width:12px;height:12px;background:${color};border:2px solid white;border-radius:50%;box-shadow:0 1px 4px ${color}60;"></div>`,
+            html: `<div style="width:12px;height:12px;background:${color};border:2px solid rgba(255,255,255,0.8);border-radius:50%;box-shadow:0 0 8px ${color}80;"></div>`,
             iconSize: [12, 12], iconAnchor: [6, 6], className: ''
         });
     }
-    const sosIcon = makeIcon('#dc2626');
-    const medicalIcon = makeIcon('#7c3aed');
-    const defaultIcon = makeIcon('#4f46e5');
+    const sosIcon = makeIcon('#ef4444');
+    const medicalIcon = makeIcon('#a855f7');
+    const defaultIcon = makeIcon('#00bcd4');
 
     // ── Helpers ──────────────────────────────────────────
     function formatTime(iso) {
@@ -453,6 +565,15 @@
         return d.toLocaleString('en-IN', {
             day: '2-digit', month: 'short', year: 'numeric',
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+    }
+
+    function shortTime(iso) {
+        if (!iso) return '-';
+        const d = new Date(iso);
+        return d.toLocaleString('en-IN', {
+            day: '2-digit', month: 'short',
+            hour: '2-digit', minute: '2-digit', hour12: true
         });
     }
 
@@ -469,6 +590,21 @@
         if (t === 'SOS') return '<span class="badge badge-sos">SOS</span>';
         if (t === 'MEDICAL') return '<span class="badge badge-medical">MEDICAL</span>';
         return `<span class="badge badge-safe">${t}</span>`;
+    }
+
+    function triggerBadge(src) {
+        if (!src) return '<span style="color:var(--text-muted)">-</span>';
+        // Make trigger display friendly
+        const map = {
+            'keyboard_demo': 'Manual Test',
+            'button': 'SOS Button',
+            'fall_detection': 'Fall Detected',
+            'heart_rate': 'Heart Rate Spike',
+            'audio_detection': 'Danger Sound',
+            'lora_relay': 'LoRa Mesh Relay'
+        };
+        const label = map[src] || src.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        return `<span class="badge badge-trigger">${esc(label)}</span>`;
     }
 
     function statusDot(val) {
@@ -516,27 +652,65 @@
         }).join('<br>');
     }
 
-    // ── Build Tables ─────────────────────────────────────
-    function buildRecentTable(alerts) {
-        if (!alerts.length) return `<div class="empty-state"><div class="icon">&#128276;</div><div>No alerts yet</div></div>`;
-        const recent = alerts.slice(0, 10);
-        let html = `<table><thead><tr><th>Time</th><th>Type</th><th>Trigger</th><th>Location</th><th>Battery</th></tr></thead><tbody>`;
-        for (const a of recent) {
-            html += `<tr>
-                <td>${formatTime(a.timestamp)}</td>
-                <td>${typeBadge(a.alert_type)}</td>
-                <td>${esc(a.trigger_source) || '-'}</td>
-                <td>${gpsLink(a.gps_location)}</td>
-                <td>${a.battery_percentage != null ? esc(a.battery_percentage) : '-'}</td>
-            </tr>`;
+    // ── Build Device Cards ────────────────────────────────
+    function buildDeviceCards(alerts) {
+        // Group alerts by device_id
+        const devices = {};
+        for (const a of alerts) {
+            const did = a.device_id || 'Unknown';
+            if (!devices[did]) devices[did] = [];
+            devices[did].push(a);
         }
-        return html + '</tbody></table>';
+
+        const deviceIds = Object.keys(devices);
+        if (!deviceIds.length) {
+            return `<div class="empty-state"><div class="icon">&#128225;</div><div>No devices found</div></div>`;
+        }
+
+        document.getElementById('deviceCount').textContent = deviceIds.length + ' device(s)';
+
+        let html = '';
+        for (const did of deviceIds) {
+            const devAlerts = devices[did];
+            const latest = devAlerts[0]; // alerts are sorted newest-first
+            const sosCount = devAlerts.filter(a => a.alert_type === 'SOS').length;
+            const medCount = devAlerts.filter(a => a.alert_type === 'MEDICAL').length;
+            const lastGps = devAlerts.find(a => a.gps_location)?.gps_location;
+            const lastBattery = devAlerts.find(a => a.battery_percentage != null)?.battery_percentage;
+
+            html += `<div class="device-card" onclick="this.classList.toggle('expanded')">
+                <div class="device-header">
+                    <span class="device-name">&#128225; ${esc(did)}</span>
+                    <span class="device-status offline">
+                        <span style="width:6px;height:6px;border-radius:50%;background:currentColor;"></span>
+                        ${devAlerts.length} alert(s)
+                    </span>
+                </div>
+                <div class="device-meta">
+                    <span>${typeBadge('SOS')} ${sosCount}</span>
+                    <span>${typeBadge('MEDICAL')} ${medCount}</span>
+                    <span>&#128267; ${lastBattery != null ? esc(lastBattery) : 'N/A'}</span>
+                    <span>Last: ${shortTime(latest.timestamp)}</span>
+                </div>
+                <div class="device-alerts">
+                    ${devAlerts.slice(0, 8).map(a => `
+                        <div class="device-alert-row">
+                            <span>${typeBadge(a.alert_type)} ${triggerBadge(a.trigger_source)}</span>
+                            <span>${shortTime(a.timestamp)}</span>
+                        </div>
+                    `).join('')}
+                    ${devAlerts.length > 8 ? `<div style="text-align:center;padding:6px;font-size:11px;color:var(--text-muted);">+ ${devAlerts.length - 8} more alerts</div>` : ''}
+                </div>
+            </div>`;
+        }
+        return html;
     }
 
+    // ── Build Full Table ──────────────────────────────────
     function buildFullTable(alerts) {
         if (!alerts.length) return `<div class="empty-state"><div class="icon">&#128202;</div><div>No alerts in database</div></div>`;
         let html = `<table><thead><tr>
-            <th>ID</th><th>Time</th><th>Device</th><th>Type</th><th>Trigger</th>
+            <th>ID</th><th>Time</th><th>Device</th><th>Type</th><th>Source</th>
             <th>Location</th><th>Battery</th><th>Call</th><th>SMS</th><th>Evidence</th>
         </tr></thead><tbody>`;
         for (const a of alerts) {
@@ -545,7 +719,7 @@
                 <td>${formatTime(a.timestamp)}</td>
                 <td>${esc(a.device_id)}</td>
                 <td>${typeBadge(a.alert_type)}</td>
-                <td>${esc(a.trigger_source) || '-'}</td>
+                <td>${triggerBadge(a.trigger_source)}</td>
                 <td>${gpsLink(a.gps_location)}</td>
                 <td>${a.battery_percentage != null ? esc(a.battery_percentage) : '-'}</td>
                 <td>${statusDot(a.call_placed_status)}</td>
@@ -617,9 +791,10 @@
             const totalFiles = alerts.reduce((sum, a) => sum + (a.uploaded_files ? a.uploaded_files.split(',').filter(f => f.trim()).length : 0), 0);
             document.getElementById('statFiles').textContent = totalFiles;
 
-            // Tables
-            document.getElementById('recentTable').innerHTML = buildRecentTable(alerts);
-            document.getElementById('recentCount').textContent = `${Math.min(alerts.length, 10)} of ${alerts.length}`;
+            // Device Cards (replaces recent alerts table)
+            document.getElementById('deviceList').innerHTML = buildDeviceCards(alerts);
+
+            // Full table
             document.getElementById('allTable').innerHTML = buildFullTable(alerts);
 
             // Evidence
@@ -634,12 +809,14 @@
                 if (!coords) continue;
                 const icon = a.alert_type === 'SOS' ? sosIcon : a.alert_type === 'MEDICAL' ? medicalIcon : defaultIcon;
                 L.marker(coords, { icon }).bindPopup(`
+                    <div style="font-size:13px;">
                     <strong>${esc(a.alert_type) || 'ALERT'}</strong> #${esc(a.id)}<br>
                     <b>Device:</b> ${esc(a.device_id)}<br>
-                    <b>Trigger:</b> ${esc(a.trigger_source) || '-'}<br>
+                    <b>Source:</b> ${triggerBadge(a.trigger_source)}<br>
                     <b>Time:</b> ${formatTime(a.timestamp)}<br>
                     <b>Battery:</b> ${esc(a.battery_percentage) || '-'}<br>
                     <b>GPS:</b> ${esc(a.gps_location)}
+                    </div>
                 `).addTo(markers);
                 bounds.push(coords);
                 mc++;
