@@ -247,10 +247,9 @@ def load_config() -> dict:
 def validate_config(config: dict) -> None:
     """Log CRITICAL warnings if config still contains placeholder values."""
     placeholders = {
-        'guardian_number':  '+91XXXXXXXXXX',
-        'medical_number':   '+91YYYYYYYYYY',
-        'server_url':       'http://your-server-ip:8080/api/alerts',
-        'server_public_url': 'http://your-server-ip:8080/uploads/',
+        'guardian_number':   '+91XXXXXXXXXX',
+        'medical_number':    '+91YYYYYYYYYY',
+        'whatsapp_apikey':   'YOUR_CALLMEBOT_APIKEY',
     }
     for key, placeholder in placeholders.items():
         if config.get(key) == placeholder:

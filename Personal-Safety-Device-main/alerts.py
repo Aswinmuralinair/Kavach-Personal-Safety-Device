@@ -4,9 +4,9 @@ alerts.py — Project Kavach
 All three alert pipelines in one place. Each function receives the shared
 SIM7600 instance from main.py (single serial port, thread-safe).
 
-  sos_sequence()     → calls police, SMS guardian, GPS loop, evidence upload
-  medical_sequence() → calls ambulance/medical contact, SMS "MEDICAL EMERGENCY" + GPS
-  safe_sequence()    → SMS "I AM SAFE" to guardian, cancels any active SOS loop
+  sos_sequence()     → calls police, SMS + WhatsApp guardian, GPS loop, evidence upload
+  medical_sequence() → calls ambulance, SMS + WhatsApp "MEDICAL EMERGENCY" + GPS
+  safe_sequence()    → SMS + WhatsApp "I AM SAFE", cancels any active alert loop
 
 State ownership lives in KavachStateMachine (main.py). This module only
 owns the _stop_alert_event used to signal the update loop to exit.
@@ -24,6 +24,7 @@ from sqlalchemy.orm import sessionmaker
 
 from database import Alert, Base
 from hardware.comms import SIM7600
+from hardware.whatsapp import send_whatsapp
 
 try:
     from hardware.power import INA219Simple, voltage_to_percentage
@@ -116,6 +117,37 @@ def _read_battery(power_monitor) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# WhatsApp helper — silently skips if not configured
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Battery percentage below this threshold triggers a WhatsApp low-battery alert
+_LOW_BATTERY_THRESHOLD = 20
+# Track whether we already sent the low-battery WhatsApp for this alert session
+# (prevents spamming every 60 seconds)
+_low_battery_wa_sent = False
+
+def _send_wa(config: dict, message: str) -> None:
+    """
+    Send a WhatsApp message via CallMeBot if configured.
+    Silently skips if whatsapp_number or whatsapp_apikey are missing/placeholder.
+    Never blocks or crashes the alert flow.
+    """
+    wa_number = config.get('whatsapp_number', '').strip()
+    wa_apikey = config.get('whatsapp_apikey', '').strip()
+
+    if (not wa_number or not wa_apikey
+            or wa_number == '+91XXXXXXXXXX'
+            or wa_apikey == 'YOUR_CALLMEBOT_APIKEY'):
+        logger.debug("[WhatsApp] Not configured — skipping.")
+        return
+
+    try:
+        send_whatsapp(wa_number, wa_apikey, message)
+    except Exception as exc:
+        logger.warning("[WhatsApp] Send failed (non-fatal): %s", exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Shared 60-second update loop (used by both SOS and medical sequences)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -142,6 +174,23 @@ def _run_update_loop(
         alert_row.battery_percentage = battery_str
         sim.send_sms(config['guardian_number'], f"[Kavach {alert_label}] Battery: {battery_str}")
 
+        # 1b. WhatsApp low-battery alert (once per alert session)
+        global _low_battery_wa_sent
+        if not _low_battery_wa_sent:
+            try:
+                pct_val = float(battery_str.replace('%', '').strip())
+                if pct_val <= _LOW_BATTERY_THRESHOLD:
+                    _send_wa(config, (
+                        f"⚠️ KAVACH LOW BATTERY\n"
+                        f"Device battery is at {battery_str}.\n"
+                        f"Active alert: {alert_label}\n"
+                        f"Time: {_ist_timestamp()}"
+                    ))
+                    _low_battery_wa_sent = True
+                    logger.info("[%s] Low-battery WhatsApp alert sent.", alert_label)
+            except (ValueError, AttributeError):
+                pass   # battery_str is "N/A" or "Error" — skip
+
         # 2. GPS — comms.py returns raw "lat,lon"; build the Maps link here
         location = sim.get_gps_location(api_token=config.get('api_token'))
         ts = _ist_timestamp()
@@ -152,6 +201,13 @@ def _run_update_loop(
                 config['guardian_number'],
                 f"[Kavach {alert_label}] Location at {ts}: {maps_link}"
             )
+            # 2b. WhatsApp location update
+            _send_wa(config, (
+                f"📍 KAVACH {alert_label} — Location Update\n"
+                f"Location: {maps_link}\n"
+                f"Battery: {battery_str}\n"
+                f"Time: {ts}"
+            ))
         else:
             sim.send_sms(
                 config['guardian_number'],
@@ -248,14 +304,26 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         alert_row.call_placed_status = True
         session.commit()
 
-    # ── Step 2: SMS guardian with initial SOS ─────────────────────────────────
-    logger.info("[SOS] Step 2 — Sending initial SOS SMS to guardian.")
+    # ── Step 2: SMS + WhatsApp guardian with initial SOS ─────────────────────
+    logger.info("[SOS] Step 2 — Sending initial SOS SMS + WhatsApp to guardian.")
     sent = sim.send_sms(
         config['guardian_number'],
         "SOS ALERT - Emergency triggered on Kavach device. Location SMS to follow."
     )
     alert_row.guardian_sms_status = sent
     session.commit()
+
+    _send_wa(config, (
+        "🚨 *KAVACH SOS ALERT*\n"
+        "Emergency has been triggered on the Kavach device.\n"
+        f"Trigger: {trigger_source}\n"
+        f"Time: {_ist_timestamp()}\n"
+        "Police have been called. Location updates to follow."
+    ))
+
+    # Reset low-battery WhatsApp flag for this new alert session
+    global _low_battery_wa_sent
+    _low_battery_wa_sent = False
 
     # ── Step 3: Immediate GPS fix + Maps link ─────────────────────────────────
     logger.info("[SOS] Step 3 — Sending GPS location.")
@@ -349,8 +417,8 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
         alert_row.location_sms_status = True
         session.commit()
 
-    # ── Step 3: SMS guardian ──────────────────────────────────────────────────
-    logger.info("[MEDICAL] Step 3 — Sending MEDICAL EMERGENCY SMS to guardian.")
+    # ── Step 3: SMS + WhatsApp guardian ──────────────────────────────────────
+    logger.info("[MEDICAL] Step 3 — Sending MEDICAL EMERGENCY SMS + WhatsApp to guardian.")
     guardian_msg = (
         f"MEDICAL EMERGENCY\n"
         f"Kavach device has detected a medical emergency.\n"
@@ -361,6 +429,18 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
     sent = sim.send_sms(config['guardian_number'], guardian_msg)
     alert_row.guardian_sms_status = sent
     session.commit()
+
+    _send_wa(config, (
+        "🏥 *KAVACH MEDICAL EMERGENCY*\n"
+        "A medical emergency has been detected.\n"
+        f"Location: {maps_link}\n"
+        f"Time: {_ist_timestamp()}\n"
+        "Ambulance has been called. Please respond immediately."
+    ))
+
+    # Reset low-battery WhatsApp flag for this new alert session
+    global _low_battery_wa_sent
+    _low_battery_wa_sent = False
 
     # ── Step 4: SMS medical contact separately (if different from guardian) ───
     if config.get('medical_number') and config['medical_number'] != config['guardian_number']:
@@ -442,6 +522,21 @@ def safe_sequence(sim: SIM7600, was_active_type: str = None,
     # ── Send to guardian (and police if SOS was active) ───────────────────────
     sim.send_sms(config['guardian_number'], message)
     logger.info("[SAFE] Safe SMS sent to guardian.")
+
+    # WhatsApp safe confirmation
+    if was_active_type:
+        _send_wa(config, (
+            f"✅ *KAVACH — USER IS SAFE*\n"
+            f"The {was_active_type.upper()} alert has been cancelled.\n"
+            f"The user has confirmed they are safe.\n"
+            f"Time: {ts}"
+        ))
+    else:
+        _send_wa(config, (
+            f"✅ *KAVACH — SAFE CHECK-IN*\n"
+            f"The user has confirmed they are safe.\n"
+            f"Time: {ts}"
+        ))
 
     if was_active_type == "sos":
         cancel_msg = (

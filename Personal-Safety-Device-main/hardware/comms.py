@@ -158,7 +158,7 @@ class SIM7600:
 
         Returns "lat,lon" string or None on failure.
         """
-        if not api_token:
+        if not api_token or api_token.startswith('YOUR_'):
             logger.warning("[SIM7600] No api_token configured — cell tower fallback skipped.")
             return None
 
