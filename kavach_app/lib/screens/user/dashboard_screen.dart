@@ -38,15 +38,15 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
     super.dispose();
   }
 
-  /// Start polling device status every 60 seconds
+  /// Start polling device status every 10 seconds
   Future<void> _initDeviceStatusPolling() async {
     final prefs = await SharedPreferences.getInstance();
     _deviceId = prefs.getString('device_id') ?? 'KAVACH-001';
 
-    // Fetch immediately, then every 60s
+    // Fetch immediately, then every 10s
     _fetchDeviceStatus();
     _statusTimer = Timer.periodic(
-      const Duration(seconds: 60),
+      const Duration(seconds: 10),
       (_) => _fetchDeviceStatus(),
     );
   }
