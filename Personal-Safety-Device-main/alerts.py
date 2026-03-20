@@ -121,9 +121,9 @@ def _read_battery(power_monitor) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Battery percentage below this threshold triggers a WhatsApp low-battery alert
-_LOW_BATTERY_THRESHOLD = 20
-# Track whether we already sent the low-battery WhatsApp for this alert session
-# (prevents spamming every 60 seconds)
+_LOW_BATTERY_THRESHOLD = 15
+# Track whether we already sent the low-battery WhatsApp this boot
+# (once per boot, not per alert session — prevents spamming)
 _low_battery_wa_sent = False
 
 def _send_wa(config: dict, message: str) -> None:
@@ -174,7 +174,7 @@ def _run_update_loop(
         alert_row.battery_percentage = battery_str
         sim.send_sms(config['guardian_number'], f"[Kavach {alert_label}] Battery: {battery_str}")
 
-        # 1b. WhatsApp low-battery alert (once per alert session)
+        # 1b. WhatsApp low-battery alert (once per boot)
         global _low_battery_wa_sent
         if not _low_battery_wa_sent:
             try:
@@ -321,10 +321,6 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         "Police have been called. Location updates to follow."
     ))
 
-    # Reset low-battery WhatsApp flag for this new alert session
-    global _low_battery_wa_sent
-    _low_battery_wa_sent = False
-
     # ── Step 3: Immediate GPS fix + Maps link ─────────────────────────────────
     logger.info("[SOS] Step 3 — Sending GPS location.")
     location = sim.get_gps_location(api_token=config.get('api_token'))
@@ -437,10 +433,6 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
         f"Time: {_ist_timestamp()}\n"
         "Ambulance has been called. Please respond immediately."
     ))
-
-    # Reset low-battery WhatsApp flag for this new alert session
-    global _low_battery_wa_sent
-    _low_battery_wa_sent = False
 
     # ── Step 4: SMS medical contact separately (if different from guardian) ───
     if config.get('medical_number') and config['medical_number'] != config['guardian_number']:
