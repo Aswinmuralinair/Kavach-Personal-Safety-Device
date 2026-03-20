@@ -9,7 +9,7 @@ import urllib.request
 
 MODELS_DIR     = "models"
 # Official YAMNet TFLite URL
-MODEL_URL      = "https://storage.googleapis.com/tfhub-lite-models/google/lite-model/yamnet/classification/tflite/1.tflite"
+MODEL_URL      = "https://huggingface.co/thelou1s/yamnet/resolve/main/lite-model_yamnet_classification_tflite_1.tflite"
 # Official AudioSet Class Map
 CLASS_MAP_URL  = "https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv"
 
