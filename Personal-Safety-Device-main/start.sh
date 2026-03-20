@@ -11,7 +11,7 @@ echo "========================================="
 echo ""
 
 # Install system-level packages (only runs once, skips if already installed)
-SYSPKGS="libportaudio2 portaudio19-dev python3-picamera2"
+SYSPKGS="libportaudio2 portaudio19-dev"
 MISSING=""
 for pkg in $SYSPKGS; do
     if ! dpkg -s "$pkg" >/dev/null 2>&1; then

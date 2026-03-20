@@ -4,19 +4,21 @@ hardware/camera.py — Project Kavach
 Pi Camera Module recording for evidence capture during alerts.
 
 Architecture (follows the same Fake/Real pattern as sensors.py):
-  - PiCameraRecorder  — real hardware via picamera2 (CSI camera)
+  - PiCameraRecorder  — real hardware via rpicam-vid CLI (CSI camera)
   - FakeCameraRecorder — no-op fallback when camera isn't connected
   - CameraManager      — auto-detects hardware, exposes start/stop API
 
 Recording behaviour:
   - When an alert fires (SOS / MEDICAL), start_recording() is called.
-  - The camera records 30-second H264 clips into the evidence/ folder.
+  - The camera records 10-second MP4 clips into the evidence/ folder.
   - The existing 60-second upload loop in alerts.py picks up new files
     and uploads them to the server.
   - When safe_sequence() fires (long press), stop_recording() is called.
 """
 
 import os
+import shutil
+import subprocess
 import threading
 import logging
 from datetime import datetime
@@ -31,7 +33,7 @@ logger = logging.getLogger(__name__)
 class BaseCameraRecorder(ABC):
     @abstractmethod
     def start_recording(self) -> None:
-        """Begin recording 30-second clips to evidence/ folder."""
+        """Begin recording clips to evidence/ folder."""
 
     @abstractmethod
     def stop_recording(self) -> None:
@@ -43,25 +45,26 @@ class BaseCameraRecorder(ABC):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Real implementation — Pi Camera via picamera2
+# Real implementation — Pi Camera via rpicam-vid CLI
 # ─────────────────────────────────────────────────────────────────────────────
 class PiCameraRecorder(BaseCameraRecorder):
     """
-    Records H264 clips of `clip_duration` seconds into `evidence_dir`.
-    All picamera2 calls happen on a dedicated daemon thread to avoid
-    blocking the alert sequence.
+    Records MP4 clips of `clip_duration` seconds into `evidence_dir`
+    using the rpicam-vid command-line tool (pre-installed on Raspberry Pi OS).
+    All recording happens on a dedicated daemon thread.
     """
 
-    def __init__(self, evidence_dir: str, clip_duration: int = 30):
+    def __init__(self, evidence_dir: str, clip_duration: int = 10):
         self._evidence_dir   = evidence_dir
         self._clip_duration  = clip_duration
         self._recording      = False
         self._stop_event     = threading.Event()
         self._record_thread  = None
 
-        # Verify picamera2 is importable (raises ImportError if not)
-        import picamera2  # noqa: F401
-        logger.info("[Camera] picamera2 library found.")
+        # Verify rpicam-vid is available
+        if not shutil.which("rpicam-vid"):
+            raise FileNotFoundError("rpicam-vid not found on PATH")
+        logger.info("[Camera] rpicam-vid found.")
 
     def start_recording(self) -> None:
         if self._recording:
@@ -81,40 +84,40 @@ class PiCameraRecorder(BaseCameraRecorder):
         logger.info("[Camera] Recording started (clip=%ds).", self._clip_duration)
 
     def _record_loop(self) -> None:
-        """Runs on a dedicated thread. Records clip_duration-second clips."""
-        from picamera2 import Picamera2
-        from picamera2.encoders import H264Encoder
-
-        picam2 = None
+        """Runs on a dedicated thread. Records clip_duration-second MP4 clips."""
         try:
-            picam2 = Picamera2()
-            video_config = picam2.create_video_configuration()
-            picam2.configure(video_config)
-            picam2.start()
-
-            while self._recording:
+            while self._recording and not self._stop_event.is_set():
                 ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"video_{ts}.h264"
+                filename = f"video_{ts}.mp4"
                 filepath = os.path.join(self._evidence_dir, filename)
 
-                encoder = H264Encoder()
-                picam2.start_recording(encoder, filepath)
+                # rpicam-vid: 640x480, 15fps, libav codec for MP4, no preview
+                cmd = [
+                    "rpicam-vid",
+                    "-t", str(self._clip_duration * 1000),  # duration in ms
+                    "--width", "640",
+                    "--height", "480",
+                    "--framerate", "15",
+                    "--codec", "libav",
+                    "--libav-format", "mp4",
+                    "--nopreview",
+                    "-o", filepath,
+                ]
 
-                # Sleep for clip_duration — wakes immediately if stop is requested
-                self._stop_event.wait(timeout=self._clip_duration)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self._clip_duration + 15)
 
-                picam2.stop_recording()
-                logger.info("[Camera] Clip saved: %s", filename)
+                if proc.returncode == 0 and os.path.exists(filepath):
+                    size = os.path.getsize(filepath)
+                    logger.info("[Camera] Clip saved: %s (%s bytes)", filename, f"{size:,}")
+                else:
+                    logger.warning("[Camera] rpicam-vid failed (rc=%d): %s",
+                                   proc.returncode, proc.stderr.strip())
 
+        except subprocess.TimeoutExpired:
+            logger.warning("[Camera] rpicam-vid timed out — retrying next clip.")
         except Exception as exc:
             logger.error("[Camera] Recording error: %s", exc, exc_info=True)
         finally:
-            if picam2:
-                try:
-                    picam2.stop()
-                    picam2.close()
-                except Exception:
-                    pass
             logger.info("[Camera] Record loop exited.")
 
     def stop_recording(self) -> None:
@@ -124,7 +127,7 @@ class PiCameraRecorder(BaseCameraRecorder):
         self._recording = False
         self._stop_event.set()
         if self._record_thread and self._record_thread.is_alive():
-            self._record_thread.join(timeout=10)
+            self._record_thread.join(timeout=self._clip_duration + 10)
         logger.info("[Camera] Recording stopped.")
 
     def shutdown(self) -> None:
@@ -135,7 +138,7 @@ class PiCameraRecorder(BaseCameraRecorder):
 # Fake implementation — no camera hardware
 # ─────────────────────────────────────────────────────────────────────────────
 class FakeCameraRecorder(BaseCameraRecorder):
-    """No-op fallback when the Pi Camera is not connected or picamera2 is not installed."""
+    """No-op fallback when the Pi Camera is not connected or rpicam-vid is not available."""
 
     def __init__(self):
         logger.warning(
@@ -159,8 +162,8 @@ class FakeCameraRecorder(BaseCameraRecorder):
 class CameraManager:
     """
     Auto-detects Pi Camera hardware at construction time.
-    Falls back to FakeCameraRecorder if picamera2 is not installed or
-    no camera is detected.
+    Falls back to FakeCameraRecorder if rpicam-vid is not available
+    or no camera is detected.
 
     Usage:
         cam = CameraManager(evidence_dir="/home/pi/kavach/evidence")
@@ -169,24 +172,19 @@ class CameraManager:
         cam.shutdown()          # device shutdown
     """
 
-    def __init__(self, evidence_dir: str, clip_duration: int = 30):
+    def __init__(self, evidence_dir: str, clip_duration: int = 10):
         self._recorder = self._detect(evidence_dir, clip_duration)
 
     @staticmethod
     def _detect(evidence_dir: str, clip_duration: int) -> BaseCameraRecorder:
         try:
             recorder = PiCameraRecorder(evidence_dir, clip_duration)
-            logger.info("[CameraManager] Pi Camera detected — REAL mode.")
+            logger.info("[CameraManager] rpicam-vid detected — REAL mode.")
             return recorder
-        except ImportError:
+        except FileNotFoundError:
             logger.warning(
-                "[CameraManager] picamera2 not installed. "
+                "[CameraManager] rpicam-vid not found. "
                 "Falling back to FakeCameraRecorder."
-            )
-        except (RuntimeError, OSError) as e:
-            logger.warning(
-                "[CameraManager] Camera hardware error (%s). "
-                "Falling back to FakeCameraRecorder.", e
             )
         except Exception as e:
             logger.warning(
