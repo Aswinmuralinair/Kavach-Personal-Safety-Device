@@ -54,12 +54,13 @@ class PiCameraRecorder(BaseCameraRecorder):
     All recording happens on a dedicated daemon thread.
     """
 
-    def __init__(self, evidence_dir: str, clip_duration: int = 10):
+    def __init__(self, evidence_dir: str, clip_duration: int = 60):
         self._evidence_dir   = evidence_dir
         self._clip_duration  = clip_duration
         self._recording      = False
         self._stop_event     = threading.Event()
         self._record_thread  = None
+        self._proc           = None        # current rpicam-vid process
 
         # Verify rpicam-vid is available
         if not shutil.which("rpicam-vid"):
@@ -85,6 +86,7 @@ class PiCameraRecorder(BaseCameraRecorder):
 
     def _record_loop(self) -> None:
         """Runs on a dedicated thread. Records clip_duration-second MP4 clips."""
+        import signal
         try:
             while self._recording and not self._stop_event.is_set():
                 ts       = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -104,17 +106,24 @@ class PiCameraRecorder(BaseCameraRecorder):
                     "-o", filepath,
                 ]
 
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=self._clip_duration + 15)
+                self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-                if proc.returncode == 0 and os.path.exists(filepath):
+                # Wait for clip to finish OR stop_event to fire
+                while self._proc.poll() is None:
+                    if self._stop_event.wait(timeout=0.5):
+                        # Graceful stop: SIGTERM lets rpicam-vid finalize the MP4
+                        self._proc.send_signal(signal.SIGTERM)
+                        self._proc.wait(timeout=5)
+                        break
+
+                self._proc = None
+
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                     size = os.path.getsize(filepath)
                     logger.info("[Camera] Clip saved: %s (%s bytes)", filename, f"{size:,}")
                 else:
-                    logger.warning("[Camera] rpicam-vid failed (rc=%d): %s",
-                                   proc.returncode, proc.stderr.strip())
+                    logger.warning("[Camera] rpicam-vid produced no output for %s", filename)
 
-        except subprocess.TimeoutExpired:
-            logger.warning("[Camera] rpicam-vid timed out — retrying next clip.")
         except Exception as exc:
             logger.error("[Camera] Recording error: %s", exc, exc_info=True)
         finally:
@@ -127,7 +136,7 @@ class PiCameraRecorder(BaseCameraRecorder):
         self._recording = False
         self._stop_event.set()
         if self._record_thread and self._record_thread.is_alive():
-            self._record_thread.join(timeout=self._clip_duration + 10)
+            self._record_thread.join(timeout=15)
         logger.info("[Camera] Recording stopped.")
 
     def shutdown(self) -> None:
