@@ -141,7 +141,7 @@ class _SplashScreenState extends State<SplashScreen>
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(28),
                         child: Image.asset(
-                          'assets/images/kavach_logo.png',
+                          'assets/images/kavach_logo.jpeg',
                           fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => Container(
                             decoration: BoxDecoration(
