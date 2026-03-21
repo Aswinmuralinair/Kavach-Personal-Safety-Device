@@ -307,6 +307,20 @@ class SIM7600:
                 payload_dict['battery_percentage'],
             )
 
+            # Telemetry-only upload (no evidence file)
+            if file_path is None:
+                r = requests.post(
+                    server_url,
+                    data={'encrypted_payload': encrypted_b64},
+                    timeout=30,
+                )
+                if r.status_code == 201:
+                    logger.info("[SIM7600] Telemetry uploaded (no evidence file).")
+                    return True, None
+                else:
+                    logger.warning("[SIM7600] Telemetry upload failed — %d.", r.status_code)
+                    return False, None
+
             # Read, hash, and encrypt the evidence file
             with open(file_path, 'rb') as f:
                 raw_file_bytes = f.read()

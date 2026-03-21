@@ -54,8 +54,9 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 
 ```
 Step 1 → START CAMERA + MICROPHONE RECORDING (30-sec video + 60-sec audio clips to evidence/)
-Step 2 → CALL POLICE (rings 15 seconds, hangs up)
-Step 3 → SMS to guardian: "SOS ALERT - Emergency triggered"
+Step 2 → UPLOAD TELEMETRY TO SERVER (immediate, so mobile app sees the alert within 5s)
+Step 3 → CALL POLICE (rings 15 seconds, hangs up)
+Step 4 → SMS to guardian: "SOS ALERT - Emergency triggered"
 Step 4 → WhatsApp alert: location + help message (via CallMeBot)
 Step 5 → Get location (GPS first, cell tower fallback if GPS fails)
          → SMS: "Location: https://maps.google.com/?q=12.97,77.59"

@@ -295,8 +295,21 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         alert_type         = "SOS",
         battery_percentage = "N/A" if not I2C_AVAILABLE else None,
     )
+    if power_monitor:
+        try:
+            alert_row.battery_percentage = f"{power_monitor.battery_percent():.1f}%"
+        except Exception:
+            pass
     session.add(alert_row)
     session.commit()
+
+    # ── Immediate server upload (telemetry only, no evidence) ───────────────
+    # This lets the mobile app see the alert immediately via polling,
+    # before the slower call/SMS/GPS sequence finishes.
+    try:
+        sim.upload_alert(config['server_url'], alert_row, file_path=None)
+    except Exception as exc:
+        logger.warning("[SOS] Immediate upload failed: %s — continuing.", exc)
 
     # ── Step 1: Call police ───────────────────────────────────────────────────
     try:
@@ -409,8 +422,19 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
         alert_type         = "MEDICAL",
         battery_percentage = "N/A" if not I2C_AVAILABLE else None,
     )
+    if power_monitor:
+        try:
+            alert_row.battery_percentage = f"{power_monitor.battery_percent():.1f}%"
+        except Exception:
+            pass
     session.add(alert_row)
     session.commit()
+
+    # ── Immediate server upload (telemetry only, no evidence) ───────────────
+    try:
+        sim.upload_alert(config['server_url'], alert_row, file_path=None)
+    except Exception as exc:
+        logger.warning("[MEDICAL] Immediate upload failed: %s — continuing.", exc)
 
     # ── Step 1: Call ambulance / medical contact ──────────────────────────────
     try:
