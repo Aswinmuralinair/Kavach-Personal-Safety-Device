@@ -44,16 +44,22 @@ class SIM7600:
         """Send AT command. Caller must hold self._lock if thread-safety needed."""
         if not self.ser:
             return False, "Not connected"
-        self.ser.write((command + '\r\n').encode())
-        start_time = time.time()
-        response   = ''
-        while time.time() - start_time < timeout:
-            response_line = self.ser.readline().decode('utf-8', errors='ignore')
-            if response_line:
-                response += response_line
-                if expected_response in response:
-                    return True, response
-        return False, response
+        try:
+            # Flush stale data before sending new command
+            self.ser.reset_input_buffer()
+            self.ser.write((command + '\r\n').encode())
+            start_time = time.time()
+            response   = ''
+            while time.time() - start_time < timeout:
+                response_line = self.ser.readline().decode('utf-8', errors='ignore')
+                if response_line:
+                    response += response_line
+                    if expected_response in response:
+                        return True, response
+            return False, response
+        except Exception as e:
+            logger.error("[SIM7600] _send_command('%s') error: %s", command[:20], e)
+            return False, str(e)
 
     # ── SMS ───────────────────────────────────────────────────────────────────
     def send_sms(self, number, text):
@@ -81,14 +87,22 @@ class SIM7600:
         if not self.ser:
             return False
         with self._lock:
-            success, _ = self._send_command(f'ATD{number};', 'OK', 10)
-            return success
+            try:
+                success, _ = self._send_command(f'ATD{number};', 'OK', 10)
+                return success
+            except Exception as e:
+                logger.error("[SIM7600] place_call error: %s", e)
+                return False
 
     def hang_up_call(self):
         if not self.ser:
             return False
         with self._lock:
-            return self._send_command('AT+CHUP', 'OK', 5)[0]
+            try:
+                return self._send_command('AT+CHUP', 'OK', 5)[0]
+            except Exception as e:
+                logger.error("[SIM7600] hang_up error: %s", e)
+                return False
 
     # ── GPS (primary) + Cell Tower fallback ──────────────────────────────────
     def get_gps_location(self, api_token: str = None):

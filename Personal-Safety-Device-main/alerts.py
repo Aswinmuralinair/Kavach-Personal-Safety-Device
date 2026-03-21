@@ -297,47 +297,56 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
     session.commit()
 
     # ── Step 1: Call police ───────────────────────────────────────────────────
-    logger.info("[SOS] Step 1 — Calling police: %s", config['police_number'])
-    if sim.place_call(config['police_number']):
-        time.sleep(15)
-        sim.hang_up_call()
-        alert_row.call_placed_status = True
-        session.commit()
+    try:
+        logger.info("[SOS] Step 1 — Calling police: %s", config['police_number'])
+        if sim.place_call(config['police_number']):
+            time.sleep(15)
+            sim.hang_up_call()
+            alert_row.call_placed_status = True
+            session.commit()
+    except Exception as exc:
+        logger.error("[SOS] Step 1 (call) failed: %s — continuing.", exc)
 
     # ── Step 2: SMS + WhatsApp guardian with initial SOS ─────────────────────
-    logger.info("[SOS] Step 2 — Sending initial SOS SMS + WhatsApp to guardian.")
-    sent = sim.send_sms(
-        config['guardian_number'],
-        "SOS ALERT - Emergency triggered on Kavach device. Location SMS to follow."
-    )
-    alert_row.guardian_sms_status = sent
-    session.commit()
+    try:
+        logger.info("[SOS] Step 2 — Sending initial SOS SMS + WhatsApp to guardian.")
+        sent = sim.send_sms(
+            config['guardian_number'],
+            "SOS ALERT - Emergency triggered on Kavach device. Location SMS to follow."
+        )
+        alert_row.guardian_sms_status = sent
+        session.commit()
 
-    _send_wa(config, (
-        "🚨 *KAVACH SOS ALERT*\n"
-        "Emergency has been triggered on the Kavach device.\n"
-        f"Trigger: {trigger_source}\n"
-        f"Time: {_ist_timestamp()}\n"
-        "Police have been called. Location updates to follow."
-    ))
+        _send_wa(config, (
+            "🚨 *KAVACH SOS ALERT*\n"
+            "Emergency has been triggered on the Kavach device.\n"
+            f"Trigger: {trigger_source}\n"
+            f"Time: {_ist_timestamp()}\n"
+            "Police have been called. Location updates to follow."
+        ))
+    except Exception as exc:
+        logger.error("[SOS] Step 2 (SMS/WhatsApp) failed: %s — continuing.", exc)
 
     # ── Step 3: Immediate GPS fix + Maps link ─────────────────────────────────
-    logger.info("[SOS] Step 3 — Sending GPS location.")
-    location = sim.get_gps_location(api_token=config.get('api_token'))
-    if location:
-        maps_link = _build_maps_link(location)
-        alert_row.gps_location = location
-        sim.send_sms(
-            config['guardian_number'],
-            f"[SOS] Last known location: {maps_link}"
-        )
-        alert_row.location_sms_status = True
-    else:
-        sim.send_sms(
-            config['guardian_number'],
-            "[SOS] GPS fix unavailable. Tracking started."
-        )
-    session.commit()
+    try:
+        logger.info("[SOS] Step 3 — Sending GPS location.")
+        location = sim.get_gps_location(api_token=config.get('api_token'))
+        if location:
+            maps_link = _build_maps_link(location)
+            alert_row.gps_location = location
+            sim.send_sms(
+                config['guardian_number'],
+                f"[SOS] Last known location: {maps_link}"
+            )
+            alert_row.location_sms_status = True
+        else:
+            sim.send_sms(
+                config['guardian_number'],
+                "[SOS] GPS fix unavailable. Tracking started."
+            )
+        session.commit()
+    except Exception as exc:
+        logger.error("[SOS] Step 3 (GPS) failed: %s — continuing.", exc)
 
     # ── Step 4: Enter 60-second update loop ───────────────────────────────────
     _run_update_loop(
@@ -396,54 +405,67 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
     session.commit()
 
     # ── Step 1: Call ambulance / medical contact ──────────────────────────────
-    medical_number = config.get('medical_number', config.get('police_number'))
-    logger.info("[MEDICAL] Step 1 — Calling medical contact: %s", medical_number)
-    if sim.place_call(medical_number):
-        time.sleep(15)
-        sim.hang_up_call()
-        alert_row.call_placed_status = True
-        session.commit()
+    try:
+        medical_number = config.get('medical_number', config.get('police_number'))
+        logger.info("[MEDICAL] Step 1 — Calling medical contact: %s", medical_number)
+        if sim.place_call(medical_number):
+            time.sleep(15)
+            sim.hang_up_call()
+            alert_row.call_placed_status = True
+            session.commit()
+    except Exception as exc:
+        logger.error("[MEDICAL] Step 1 (call) failed: %s — continuing.", exc)
 
     # ── Step 2: Immediate GPS fix ─────────────────────────────────────────────
-    logger.info("[MEDICAL] Step 2 — Getting GPS fix.")
-    location  = sim.get_gps_location(api_token=config.get('api_token'))
-    maps_link = _build_maps_link(location) if location else "GPS unavailable"
-    if location:
-        alert_row.gps_location        = location
-        alert_row.location_sms_status = True
-        session.commit()
+    maps_link = "GPS unavailable"
+    try:
+        logger.info("[MEDICAL] Step 2 — Getting GPS fix.")
+        location  = sim.get_gps_location(api_token=config.get('api_token'))
+        maps_link = _build_maps_link(location) if location else "GPS unavailable"
+        if location:
+            alert_row.gps_location        = location
+            alert_row.location_sms_status = True
+            session.commit()
+    except Exception as exc:
+        logger.error("[MEDICAL] Step 2 (GPS) failed: %s — continuing.", exc)
 
     # ── Step 3: SMS + WhatsApp guardian ──────────────────────────────────────
-    logger.info("[MEDICAL] Step 3 — Sending MEDICAL EMERGENCY SMS + WhatsApp to guardian.")
-    guardian_msg = (
-        f"MEDICAL EMERGENCY\n"
-        f"Kavach device has detected a medical emergency.\n"
-        f"Location: {maps_link}\n"
-        f"Time: {_ist_timestamp()}\n"
-        f"Ambulance has been called. Please respond immediately."
-    )
-    sent = sim.send_sms(config['guardian_number'], guardian_msg)
-    alert_row.guardian_sms_status = sent
-    session.commit()
+    try:
+        logger.info("[MEDICAL] Step 3 — Sending MEDICAL EMERGENCY SMS + WhatsApp to guardian.")
+        guardian_msg = (
+            f"MEDICAL EMERGENCY\n"
+            f"Kavach device has detected a medical emergency.\n"
+            f"Location: {maps_link}\n"
+            f"Time: {_ist_timestamp()}\n"
+            f"Ambulance has been called. Please respond immediately."
+        )
+        sent = sim.send_sms(config['guardian_number'], guardian_msg)
+        alert_row.guardian_sms_status = sent
+        session.commit()
 
-    _send_wa(config, (
-        "🏥 *KAVACH MEDICAL EMERGENCY*\n"
-        "A medical emergency has been detected.\n"
-        f"Location: {maps_link}\n"
-        f"Time: {_ist_timestamp()}\n"
-        "Ambulance has been called. Please respond immediately."
-    ))
+        _send_wa(config, (
+            "🏥 *KAVACH MEDICAL EMERGENCY*\n"
+            "A medical emergency has been detected.\n"
+            f"Location: {maps_link}\n"
+            f"Time: {_ist_timestamp()}\n"
+            "Ambulance has been called. Please respond immediately."
+        ))
+    except Exception as exc:
+        logger.error("[MEDICAL] Step 3 (SMS/WhatsApp) failed: %s — continuing.", exc)
 
     # ── Step 4: SMS medical contact separately (if different from guardian) ───
-    if config.get('medical_number') and config['medical_number'] != config['guardian_number']:
-        logger.info("[MEDICAL] Step 4 — Notifying medical contact by SMS.")
-        medical_msg = (
-            f"MEDICAL EMERGENCY — KAVACH DEVICE ALERT\n"
-            f"User requires immediate medical assistance.\n"
-            f"Location: {maps_link}\n"
-            f"Time: {_ist_timestamp()}"
-        )
-        sim.send_sms(config['medical_number'], medical_msg)
+    try:
+        if config.get('medical_number') and config['medical_number'] != config['guardian_number']:
+            logger.info("[MEDICAL] Step 4 — Notifying medical contact by SMS.")
+            medical_msg = (
+                f"MEDICAL EMERGENCY — KAVACH DEVICE ALERT\n"
+                f"User requires immediate medical assistance.\n"
+                f"Location: {maps_link}\n"
+                f"Time: {_ist_timestamp()}"
+            )
+            sim.send_sms(config['medical_number'], medical_msg)
+    except Exception as exc:
+        logger.error("[MEDICAL] Step 4 (medical SMS) failed: %s — continuing.", exc)
 
     # ── Step 5: Enter 60-second update loop ───────────────────────────────────
     _run_update_loop(
@@ -512,8 +534,11 @@ def safe_sequence(sim: SIM7600, was_active_type: str = None,
         )
 
     # ── Send to guardian (and police if SOS was active) ───────────────────────
-    sim.send_sms(config['guardian_number'], message)
-    logger.info("[SAFE] Safe SMS sent to guardian.")
+    try:
+        sim.send_sms(config['guardian_number'], message)
+        logger.info("[SAFE] Safe SMS sent to guardian.")
+    except Exception as exc:
+        logger.error("[SAFE] Guardian SMS failed: %s", exc)
 
     # WhatsApp safe confirmation
     if was_active_type:
@@ -530,13 +555,16 @@ def safe_sequence(sim: SIM7600, was_active_type: str = None,
             f"Time: {ts}"
         ))
 
-    if was_active_type == "sos":
-        cancel_msg = (
-            f"KAVACH DEVICE — FALSE ALARM CANCEL\n"
-            f"The SOS alert from this device at {ts} has been cancelled by the user. "
-            f"No further response required."
-        )
-        sim.send_sms(config['police_number'], cancel_msg)
-        logger.info("[SAFE] Cancellation SMS also sent to police number.")
+    try:
+        if was_active_type == "sos":
+            cancel_msg = (
+                f"KAVACH DEVICE — FALSE ALARM CANCEL\n"
+                f"The SOS alert from this device at {ts} has been cancelled by the user. "
+                f"No further response required."
+            )
+            sim.send_sms(config['police_number'], cancel_msg)
+            logger.info("[SAFE] Cancellation SMS also sent to police number.")
+    except Exception as exc:
+        logger.error("[SAFE] Police cancel SMS failed: %s", exc)
 
     logger.info("[SAFE] Device reset to IDLE — ready for next trigger.")
