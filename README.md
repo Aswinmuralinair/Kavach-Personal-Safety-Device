@@ -29,7 +29,7 @@ When you run `python main.py` on the Pi, it starts 10 subsystems simultaneously:
 2. **IMU** (BNO055 via I2C) — checks for falls 10 times/second
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
-5. **Pi Camera** (CSI interface via rpicam-vid) — records 60-second MP4 evidence clips during alerts
+5. **Pi Camera** (CSI interface via rpicam-vid) — records 30-second MP4 evidence clips during alerts
 6. **Microphone Recorder** (sounddevice) — records 60-second WAV audio evidence during alerts
 7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
 8. **Config Sync** — polls server every 10s for config changes + sends battery heartbeat
@@ -53,7 +53,7 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 ### SOS Sequence
 
 ```
-Step 1 → START CAMERA + MICROPHONE RECORDING (60-sec video + audio clips to evidence/)
+Step 1 → START CAMERA + MICROPHONE RECORDING (30-sec video + 60-sec audio clips to evidence/)
 Step 2 → CALL POLICE (rings 15 seconds, hangs up)
 Step 3 → SMS to guardian: "SOS ALERT - Emergency triggered"
 Step 4 → WhatsApp alert: location + help message (via CallMeBot)
@@ -353,7 +353,7 @@ Kavach/
 │   │   ├── sensors.py              ← BNO055 (IMU/fall) + MAX30102 (heart rate)
 │   │   ├── audio.py                ← YAMNet microphone listener
 │   │   ├── button.py               ← GPIO button with single/double/long press
-│   │   ├── camera.py               ← Pi Camera: 60-sec MP4 clip recording (rpicam-vid)
+│   │   ├── camera.py               ← Pi Camera: 30-sec MP4 clip recording (rpicam-vid)
 │   │   ├── audio_recorder.py       ← Microphone: 60-sec WAV clip recording
 │   │   ├── whatsapp.py             ← CallMeBot WhatsApp API wrapper
 │   │   ├── lora.py                 ← SX1278 LoRa mesh radio
@@ -549,8 +549,8 @@ During SOS and MEDICAL alerts:
 | 4 | **App push notifications** | `flutter_local_notifications` polls every 5 seconds. Shows notification with sound when new SOS/MEDICAL alert arrives |
 | 5 | **App splash screen** | Animated Kavach logo with "Your Safety, Our Priority" caption on app launch |
 | 6 | **Custom launcher icon** | Kavach logo replaces default Flutter icon on Android home screen |
-| 7 | **Camera fix (rpicam-vid)** | Replaced picamera2 with `rpicam-vid` subprocess for Pi Camera recording. 60-second MP4 clips |
-| 8 | **Audio recording 60s** | Audio clips set to 60 seconds to match camera clip duration |
+| 7 | **Camera fix (rpicam-vid)** | Replaced picamera2 with `rpicam-vid` subprocess for Pi Camera recording. 30-second MP4 clips |
+| 8 | **Audio recording 60s** | Audio clips set to 60 seconds, video clips to 30 seconds |
 | 9 | **Config poll 10s** | Device polls server every 10 seconds (was 60s) for faster config sync and battery heartbeat |
 | 10 | **Keyboard on Pi** | Keyboard demo keys (f/h/a/s/d/l/q) now work on Pi alongside GPIO buttons for remote testing |
 | 11 | **YAMNet fix** | Fixed download URL (403 error) and audio buffer size (15600 samples, not 16000) |

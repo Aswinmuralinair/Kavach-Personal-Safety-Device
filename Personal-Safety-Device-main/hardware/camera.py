@@ -10,7 +10,7 @@ Architecture (follows the same Fake/Real pattern as sensors.py):
 
 Recording behaviour:
   - When an alert fires (SOS / MEDICAL), start_recording() is called.
-  - The camera records 60-second MP4 clips into the evidence/ folder.
+  - The camera records 30-second MP4 clips into the evidence/ folder.
   - The existing 60-second upload loop in alerts.py picks up new files
     and uploads them to the server.
   - When safe_sequence() fires (long press), stop_recording() is called.
@@ -54,7 +54,7 @@ class PiCameraRecorder(BaseCameraRecorder):
     All recording happens on a dedicated daemon thread.
     """
 
-    def __init__(self, evidence_dir: str, clip_duration: int = 60):
+    def __init__(self, evidence_dir: str, clip_duration: int = 30):
         self._evidence_dir   = evidence_dir
         self._clip_duration  = clip_duration
         self._recording      = False
@@ -181,7 +181,7 @@ class CameraManager:
         cam.shutdown()          # device shutdown
     """
 
-    def __init__(self, evidence_dir: str, clip_duration: int = 60):
+    def __init__(self, evidence_dir: str, clip_duration: int = 30):
         self._recorder = self._detect(evidence_dir, clip_duration)
 
     @staticmethod

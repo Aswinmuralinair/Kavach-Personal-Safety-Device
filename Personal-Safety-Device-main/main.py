@@ -34,7 +34,7 @@ CONCURRENT TRIGGER THREADS (all run from boot, daemon threads):
   Thread 5: LoRaRX             — continuous SX1278 receive loop
 
 EVIDENCE CAPTURE (started/stopped per alert, daemon threads):
-  CameraManager        — 60-second MP4 clips via rpicam-vid / FakeCameraRecorder
+  CameraManager        — 30-second MP4 clips via rpicam-vid / FakeCameraRecorder
   AudioRecorderManager — 60-second WAV clips via microphone / FakeAudioRecorder
 
 BACKGROUND SERVICES (daemon threads):
