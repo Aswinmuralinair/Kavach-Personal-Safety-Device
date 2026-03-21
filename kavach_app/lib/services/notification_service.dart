@@ -71,8 +71,31 @@ class NotificationService {
         final deviceId = latest['device_id'] ?? '';
         final gps = latest['gps_location'] ?? '';
 
+        // Map raw trigger sources to friendly names
+        const triggerLabels = {
+          'keyboard_demo': 'SOS Button',
+          'button_single': 'SOS Button',
+          'button_double': 'Medical Button',
+          'fall_detected': 'Fall Detected',
+          'heartrate_spike': 'Heart Rate Spike',
+          'audio_detection': 'Danger Sound',
+          'lora_relay': 'LoRa Mesh Relay',
+        };
+        // Match partial keys (e.g. audio_screaming → Danger Sound)
+        String friendlyTrigger = trigger;
+        for (final entry in triggerLabels.entries) {
+          if (trigger.toLowerCase().contains(entry.key.toLowerCase()) ||
+              entry.key.toLowerCase().contains(trigger.toLowerCase())) {
+            friendlyTrigger = entry.value;
+            break;
+          }
+        }
+        if (trigger.startsWith('audio_')) {
+          friendlyTrigger = 'Danger Sound';
+        }
+
         String body = 'Device: $deviceId';
-        if (trigger.isNotEmpty) body += ' | $trigger';
+        if (friendlyTrigger.isNotEmpty) body += ' | $friendlyTrigger';
         if (gps.isNotEmpty) body += '\nLocation: $gps';
 
         await _showNotification(

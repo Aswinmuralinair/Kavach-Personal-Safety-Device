@@ -45,8 +45,10 @@ class SIM7600:
         if not self.ser:
             return False, "Not connected"
         try:
-            # Flush stale data before sending new command
-            self.ser.reset_input_buffer()
+            # Drain any leftover bytes without the risky reset_input_buffer()
+            while self.ser.in_waiting:
+                self.ser.read(self.ser.in_waiting)
+            time.sleep(0.1)  # brief settle time for the modem
             self.ser.write((command + '\r\n').encode())
             start_time = time.time()
             response   = ''
@@ -107,18 +109,17 @@ class SIM7600:
     # ── GPS (primary) + Cell Tower fallback ──────────────────────────────────
     def get_gps_location(self, api_token: str = None):
         """
-        Returns a raw coordinate string "lat,lon" (e.g. "12.9716,77.5946"),
-        or None if no location could be obtained.
+        Returns (coordinates, source) tuple:
+          coordinates: "lat,lon" string or None
+          source: "GPS" or "Cell Tower" or None
 
         Location strategy (two-tier):
           1. GPS via AT+CGPS — accurate to ~3 m (needs sky view, may take 30+ s)
           2. Cell tower via AT+CPSI? + Unwired Labs API — accurate to ~200-500 m
              (works indoors, needs internet + api_token from config.json)
-
-        alerts.py builds the Google Maps URL from raw coordinates via _build_maps_link().
         """
         if not self.ser:
-            return None
+            return None, None
 
         with self._lock:
             # ── Tier 1: GPS satellite fix ─────────────────────────────────────
@@ -152,13 +153,13 @@ class SIM7600:
             self._send_command('AT+CGPS=0', 'OK', 1)
 
             if coordinates:
-                return coordinates
+                return coordinates, "GPS"
 
             # ── Tier 2: Cell tower fallback via Unwired Labs ──────────────────
             logger.warning("[SIM7600] GPS failed after 15 attempts — trying cell tower fallback.")
             coordinates = self._cell_tower_locate(api_token)
 
-        return coordinates
+        return coordinates, "Cell Tower" if coordinates else None
 
     def _cell_tower_locate(self, api_token: str = None) -> str:
         """

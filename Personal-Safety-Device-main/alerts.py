@@ -191,10 +191,11 @@ def _run_update_loop(
             except (ValueError, AttributeError):
                 pass   # battery_str is "N/A" or "Error" — skip
 
-        # 2. GPS — comms.py returns raw "lat,lon"; build the Maps link here
-        location = sim.get_gps_location(api_token=config.get('api_token'))
+        # 2. GPS — comms.py returns (coords, source) tuple
+        location, loc_source = sim.get_gps_location(api_token=config.get('api_token'))
         ts = _ist_timestamp()
         if location:
+            logger.info("[%s] Location acquired via %s: %s", alert_label, loc_source, location)
             maps_link = _build_maps_link(location)
             alert_row.gps_location = location
             sim.send_sms(
@@ -329,9 +330,10 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
 
     # ── Step 3: Immediate GPS fix + Maps link ─────────────────────────────────
     try:
-        logger.info("[SOS] Step 3 — Sending GPS location.")
-        location = sim.get_gps_location(api_token=config.get('api_token'))
+        logger.info("[SOS] Step 3 — Acquiring location...")
+        location, loc_source = sim.get_gps_location(api_token=config.get('api_token'))
         if location:
+            logger.info("[SOS] Location via %s: %s", loc_source, location)
             maps_link = _build_maps_link(location)
             alert_row.gps_location = location
             sim.send_sms(
@@ -419,10 +421,11 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
     # ── Step 2: Immediate GPS fix ─────────────────────────────────────────────
     maps_link = "GPS unavailable"
     try:
-        logger.info("[MEDICAL] Step 2 — Getting GPS fix.")
-        location  = sim.get_gps_location(api_token=config.get('api_token'))
+        logger.info("[MEDICAL] Step 2 — Acquiring location...")
+        location, loc_source = sim.get_gps_location(api_token=config.get('api_token'))
         maps_link = _build_maps_link(location) if location else "GPS unavailable"
         if location:
+            logger.info("[MEDICAL] Location via %s: %s", loc_source, location)
             alert_row.gps_location        = location
             alert_row.location_sms_status = True
             session.commit()

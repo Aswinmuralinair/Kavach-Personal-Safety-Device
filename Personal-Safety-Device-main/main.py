@@ -409,8 +409,7 @@ def _keyboard_listener(sensor_manager: SensorManager, audio_manager: AudioManage
             logger.warning("[Keyboard] No keyboard input method available — demo keys disabled.")
             return
 
-    logger.info("[Keyboard] Demo key listener active:")
-    logger.info("   f=fall  h=heartrate  a=audio  s=SOS  d=MEDICAL  l=SAFE  q=quit")
+    logger.debug("[Keyboard] Demo key listener active.")
 
     while True:
         try:
@@ -491,7 +490,7 @@ def _imu_monitor(sensor_manager: SensorManager) -> None:
     Triggers SOS if the acceleration magnitude exceeds the fall threshold.
     Falls back to FakeIMU data automatically.
     """
-    logger.info("[IMU] Monitor thread started.")
+    logger.debug("[IMU] Monitor thread started.")
     while True:
         try:
             reading = sensor_manager.imu.read()
@@ -516,16 +515,17 @@ def _heart_rate_monitor(sensor_manager: SensorManager) -> None:
     Triggers SOS if BPM >= SensorManager.BPM_DISTRESS_THRESHOLD (default 140).
     Falls back to FakeHeartRate data automatically.
     """
-    logger.info("[HeartRate] Monitor thread started.")
+    logger.debug("[HeartRate] Monitor thread started.")
     while True:
         try:
             reading = sensor_manager.heart_rate.read()
             if reading.is_valid:
-                logger.info(
-                    "[HeartRate] BPM=%.1f SpO2=%.1f%% hardware=%s",
-                    reading.bpm, reading.spo2,
-                    "REAL" if reading.is_real_hardware else "FAKE"
-                )
+                # Only log when real hardware is present (suppress fake data noise)
+                if reading.is_real_hardware:
+                    logger.info(
+                        "[HeartRate] BPM=%.1f SpO2=%.1f%%",
+                        reading.bpm, reading.spo2,
+                    )
                 if reading.is_distress_detected:
                     logger.warning("[HeartRate] DISTRESS DETECTED BPM=%.1f", reading.bpm)
                     kavach.trigger_alert("sos", "heartrate_spike")
@@ -720,26 +720,12 @@ if __name__ == '__main__':
         name="KeyboardDemo",
         daemon=True,
     ).start()
-    logger.info("[Boot] Keyboard listener started (keys: s=SOS d=MEDICAL l=SAFE f=fall h=heart a=audio q=quit).")
+    logger.debug("[Boot] Keyboard listener started.")
 
     # ── 14. Ready ─────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info(" Kavach ARMED — %s", kavach.status_line())
-    logger.info(" Triggers active:")
-    logger.info("   Button single press  → SOS")
-    logger.info("   Button double press  → MEDICAL ALERT")
-    logger.info("   Button long press 5s → SAFE (cancel + notify)")
-    logger.info("   IMU fall detected    → SOS")
-    logger.info("   Heart rate spike     → SOS")
-    logger.info("   Audio danger sound   → SOS (YAMNet)")
-    logger.info("   LoRa RX              → Mesh relay")
-    if not _on_pi:
-        logger.info(" Demo keys (desktop only):")
-        logger.info("   f=fall  h=heartrate  a=audio  s=SOS  d=MEDICAL  l=SAFE  q=quit")
-    logger.info(" Evidence capture:")
-    logger.info("   %s", camera_manager.status_string())
-    logger.info("   %s", audio_recorder.status_string())
-    logger.info(" Config sync: polling server every %ds", CONFIG_POLL_INTERVAL)
+    logger.info(" Keys: s=SOS  d=MEDICAL  l=SAFE  f=fall  h=heart  a=audio  q=quit")
     logger.info("=" * 60)
 
     # ── 14. Main thread sleeps — all work is in daemon threads ────────────────
