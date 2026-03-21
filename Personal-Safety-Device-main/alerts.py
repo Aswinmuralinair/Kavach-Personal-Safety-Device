@@ -261,7 +261,7 @@ def _run_update_loop(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def sos_sequence(sim: SIM7600, trigger_source: str = "button",
-                 cam=None, mic=None) -> None:
+                 cam=None, mic=None, **kwargs) -> None:
     """
     Full SOS pipeline:
       1. Starts camera + microphone evidence recording
@@ -375,7 +375,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
 # 2. MEDICAL ALERT SEQUENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
+def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
     """
     Medical emergency pipeline:
       0. Starts camera + microphone evidence recording

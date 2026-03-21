@@ -111,13 +111,15 @@ class KavachStateMachine:
     """
 
     def __init__(self, sim: SIM7600, cam: CameraManager = None,
-                 mic: AudioRecorderManager = None):
-        self._state      = DeviceState.IDLE
-        self._lock       = threading.Lock()
-        self._alert_type = None   # "sos" | "medical" | None
-        self._sim        = sim    # shared serial port — never re-opened
-        self._cam        = cam    # evidence video recording
-        self._mic        = mic    # evidence audio recording
+                 mic: AudioRecorderManager = None, audio_manager=None):
+        self._state         = DeviceState.IDLE
+        self._lock          = threading.Lock()
+        self._alert_type    = None   # "sos" | "medical" | None
+        self._sim           = sim    # shared serial port — never re-opened
+        self._cam           = cam    # evidence video recording
+        self._mic           = mic    # evidence audio recording
+        self._audio_manager = audio_manager  # YAMNet — paused during alerts to free RAM
+        self._audio_cb      = None           # stored so we can resume after alert
 
     # ── Public properties ─────────────────────────────────────────────────────
     @property
@@ -170,10 +172,12 @@ class KavachStateMachine:
         if alert_type == "sos":
             target = sos_sequence
             kwargs = {"sim": self._sim, "trigger_source": trigger_source,
-                      "cam": self._cam, "mic": self._mic}
+                      "cam": self._cam, "mic": self._mic,
+                      "_audio_cb": self._audio_cb}
         elif alert_type == "medical":
             target = medical_sequence
-            kwargs = {"sim": self._sim, "cam": self._cam, "mic": self._mic}
+            kwargs = {"sim": self._sim, "cam": self._cam, "mic": self._mic,
+                      "_audio_cb": self._audio_cb}
         else:
             logger.error("[StateMachine] Unknown alert_type: '%s'", alert_type)
             with self._lock:
@@ -193,12 +197,27 @@ class KavachStateMachine:
         """
         Wrapper that runs the alert sequence and resets state to IDLE
         when the sequence ends (either naturally or via safe_sequence).
+        Pauses YAMNet during the alert to free RAM for evidence encryption/upload.
         """
+        # Pause YAMNet to free memory for evidence encryption + upload
+        if self._audio_manager:
+            try:
+                self._audio_manager.stop()
+                logger.info("[StateMachine] YAMNet paused to free RAM for evidence processing.")
+            except Exception:
+                pass
         try:
             target_fn(**kwargs)
         except Exception as exc:
             logger.error("[StateMachine] Alert sequence raised: %s", exc, exc_info=True)
         finally:
+            # Resume YAMNet after alert completes
+            if self._audio_manager:
+                try:
+                    self._audio_manager.start(on_detection=kwargs.get('_audio_cb'))
+                    logger.info("[StateMachine] YAMNet resumed.")
+                except Exception:
+                    pass
             with self._lock:
                 prev_type        = self._alert_type
                 self._state      = DeviceState.IDLE
@@ -669,6 +688,9 @@ if __name__ == '__main__':
     audio_manager = AudioManager()
     audio_manager.start(on_detection=_on_audio_detection)
     logger.info("[Boot] %s", audio_manager.status_string())
+    # Link audio manager to state machine so it pauses YAMNet during alerts
+    kavach._audio_manager = audio_manager
+    kavach._audio_cb = _on_audio_detection
 
     # ── 9. LoRa off-grid backup ───────────────────────────────────────────────
     lora_manager = LoRaManager()

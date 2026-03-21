@@ -550,7 +550,7 @@ During SOS and MEDICAL alerts:
 | 5 | **App splash screen** | Animated Kavach logo with "Your Safety, Our Priority" caption on app launch |
 | 6 | **Custom launcher icon** | Kavach logo replaces default Flutter icon on Android home screen |
 | 7 | **Camera fix (rpicam-vid)** | Replaced picamera2 with `rpicam-vid` subprocess for Pi Camera recording. 60-second MP4 clips |
-| 8 | **Audio recording 60s** | Audio clips increased from 30s to 60s |
+| 8 | **Audio recording 60s** | Audio clips set to 60 seconds to match camera clip duration |
 | 9 | **Config poll 10s** | Device polls server every 10 seconds (was 60s) for faster config sync and battery heartbeat |
 | 10 | **Keyboard on Pi** | Keyboard demo keys (f/h/a/s/d/l/q) now work on Pi alongside GPIO buttons for remote testing |
 | 11 | **YAMNet fix** | Fixed download URL (403 error) and audio buffer size (15600 samples, not 16000) |
