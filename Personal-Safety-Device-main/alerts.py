@@ -301,16 +301,20 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
     try:
         logger.info("[SOS] Step 1 — Calling police: %s", config['police_number'])
         if sim.place_call(config['police_number']):
+            logger.info("[SOS] Call connected. Waiting 15s...")
             time.sleep(15)
             sim.hang_up_call()
             alert_row.call_placed_status = True
             session.commit()
+        else:
+            logger.warning("[SOS] Call failed — modem did not respond.")
+        time.sleep(2)  # let modem settle between operations
     except Exception as exc:
         logger.error("[SOS] Step 1 (call) failed: %s — continuing.", exc)
 
     # ── Step 2: SMS + WhatsApp guardian with initial SOS ─────────────────────
     try:
-        logger.info("[SOS] Step 2 — Sending initial SOS SMS + WhatsApp to guardian.")
+        logger.info("[SOS] Step 2 — Sending SOS SMS to guardian.")
         sent = sim.send_sms(
             config['guardian_number'],
             "SOS ALERT - Emergency triggered on Kavach device. Location SMS to follow."
@@ -411,10 +415,14 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
         medical_number = config.get('medical_number', config.get('police_number'))
         logger.info("[MEDICAL] Step 1 — Calling medical contact: %s", medical_number)
         if sim.place_call(medical_number):
+            logger.info("[MEDICAL] Call connected. Waiting 15s...")
             time.sleep(15)
             sim.hang_up_call()
             alert_row.call_placed_status = True
             session.commit()
+        else:
+            logger.warning("[MEDICAL] Call failed — modem did not respond.")
+        time.sleep(2)  # let modem settle
     except Exception as exc:
         logger.error("[MEDICAL] Step 1 (call) failed: %s — continuing.", exc)
 

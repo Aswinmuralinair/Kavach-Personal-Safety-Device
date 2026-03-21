@@ -77,8 +77,10 @@ class SIM7600:
                     sms_success, _ = self._send_command('', 'OK', 20)
                     if sms_success:
                         logger.info("[SIM7600] SMS sent to %s.", number)
+                        time.sleep(1)  # modem settle time
                         return True
                 logger.warning("[SIM7600] Failed to send SMS to %s.", number)
+                time.sleep(1)  # modem settle time
                 return False
             except Exception as e:
                 logger.error("[SIM7600] Error during send_sms: %s", e)
@@ -90,7 +92,7 @@ class SIM7600:
             return False
         with self._lock:
             try:
-                success, _ = self._send_command(f'ATD{number};', 'OK', 10)
+                success, _ = self._send_command(f'ATD{number};', 'OK', 20)
                 return success
             except Exception as e:
                 logger.error("[SIM7600] place_call error: %s", e)
