@@ -8,6 +8,7 @@ class AlertModel {
   final bool guardianSmsStatus;
   final bool locationSmsStatus;
   final String? gpsLocation;
+  final String? locationSource;
   final double? batteryPercentage;
   final String? uploadedFiles;
   final String? fileHashes;
@@ -22,6 +23,7 @@ class AlertModel {
     this.guardianSmsStatus = false,
     this.locationSmsStatus = false,
     this.gpsLocation,
+    this.locationSource,
     this.batteryPercentage,
     this.uploadedFiles,
     this.fileHashes,
@@ -38,6 +40,7 @@ class AlertModel {
       guardianSmsStatus: json['guardian_sms_status'] == true,
       locationSmsStatus: json['location_sms_status'] == true,
       gpsLocation: json['gps_location'],
+      locationSource: json['location_source'],
       batteryPercentage: _parseBattery(json['battery_percentage']),
       uploadedFiles: json['uploaded_files'],
       fileHashes: json['file_hashes'],

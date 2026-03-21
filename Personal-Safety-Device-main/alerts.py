@@ -197,10 +197,11 @@ def _run_update_loop(
         if location:
             logger.info("[%s] Location acquired via %s: %s", alert_label, loc_source, location)
             maps_link = _build_maps_link(location)
-            alert_row.gps_location = location
+            alert_row.gps_location    = location
+            alert_row.location_source = loc_source
             sim.send_sms(
                 config['guardian_number'],
-                f"[Kavach {alert_label}] Location at {ts}: {maps_link}"
+                f"[Kavach {alert_label}] Location ({loc_source}) at {ts}: {maps_link}"
             )
             # 2b. WhatsApp location update
             _send_wa(config, (
@@ -339,10 +340,11 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         if location:
             logger.info("[SOS] Location via %s: %s", loc_source, location)
             maps_link = _build_maps_link(location)
-            alert_row.gps_location = location
+            alert_row.gps_location    = location
+            alert_row.location_source = loc_source
             sim.send_sms(
                 config['guardian_number'],
-                f"[SOS] Last known location: {maps_link}"
+                f"[SOS] Location ({loc_source}): {maps_link}"
             )
             alert_row.location_sms_status = True
         else:
@@ -435,6 +437,7 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None) -> None:
         if location:
             logger.info("[MEDICAL] Location via %s: %s", loc_source, location)
             alert_row.gps_location        = location
+            alert_row.location_source     = loc_source
             alert_row.location_sms_status = True
             session.commit()
     except Exception as exc:

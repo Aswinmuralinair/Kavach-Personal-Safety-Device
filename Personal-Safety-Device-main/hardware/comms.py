@@ -288,6 +288,7 @@ class SIM7600:
                 'guardian_sms_status': alert_object.guardian_sms_status,
                 'location_sms_status': alert_object.location_sms_status,
                 'gps_location':        alert_object.gps_location,
+                'location_source':     getattr(alert_object, 'location_source', None),
                 'battery_percentage':  alert_object.battery_percentage,
             }
 

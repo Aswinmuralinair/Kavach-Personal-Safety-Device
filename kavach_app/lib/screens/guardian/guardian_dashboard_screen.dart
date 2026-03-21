@@ -110,7 +110,7 @@ class _GuardianDashboardScreenState extends State<GuardianDashboardScreen> {
                   if (_latestAlert!.gpsLocation != null) ...[
                     const SizedBox(height: 4),
                     Text(
-                      'Location: ${_latestAlert!.gpsLocation}',
+                      'Location: ${_latestAlert!.gpsLocation}${_latestAlert!.locationSource != null ? '  (${_latestAlert!.locationSource})' : ''}',
                       style:
                           TextStyle(color: Colors.white.withAlpha(204), fontSize: 13),
                     ),

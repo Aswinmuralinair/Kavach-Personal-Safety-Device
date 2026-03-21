@@ -29,7 +29,8 @@ class Alert(Base):
     location_sms_status = Column(Boolean, default=False)
 
     # Store the location if acquired
-    gps_location = Column(String(255), nullable=True)
+    gps_location    = Column(String(255), nullable=True)
+    location_source = Column(String(20),  nullable=True)   # "GPS" | "Cell Tower"
 
     battery_percentage = Column(String(10), nullable=True)   # e.g., "93.0%" or "N/A"
     trigger_source     = Column(String(64), nullable=True)

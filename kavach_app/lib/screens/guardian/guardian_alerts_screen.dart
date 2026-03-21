@@ -203,7 +203,7 @@ class _GuardianAlertCardState extends State<_GuardianAlertCard> {
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
-                            alert.gpsLocation!,
+                            '${alert.gpsLocation!}${alert.locationSource != null ? '  (${alert.locationSource})' : ''}',
                             style: theme.textTheme.bodySmall,
                             overflow: TextOverflow.ellipsis,
                           ),

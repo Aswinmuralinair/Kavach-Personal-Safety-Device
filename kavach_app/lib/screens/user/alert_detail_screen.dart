@@ -200,8 +200,11 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                 ),
                 _DetailRow(
                   icon: Icons.my_location,
-                  label: 'GPS',
-                  value: _formatGps(_alert?['gps_location']),
+                  label: 'Location',
+                  value: _formatGps(_alert?['gps_location']) +
+                      (_alert?['location_source'] != null
+                          ? '  (${_alert!['location_source']})'
+                          : ''),
                 ),
               ],
             ),

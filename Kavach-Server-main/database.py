@@ -35,6 +35,7 @@ class Alert(DB.Model):
 
     # ── Telemetry ─────────────────────────────────────────────────────────────
     gps_location       = DB.Column(DB.String(255), nullable=True)
+    location_source    = DB.Column(DB.String(20),  nullable=True)   # "GPS" | "Cell Tower"
     battery_percentage = DB.Column(DB.String(10),  nullable=True)   # "87%" | "N/A" | "Error"
 
     # ── Evidence files ────────────────────────────────────────────────────────

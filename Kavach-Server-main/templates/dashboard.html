@@ -426,12 +426,13 @@
         return `<span class="status-dot ${val ? 'on' : 'off'}"></span>${val ? 'Yes' : 'No'}`;
     }
 
-    function gpsLink(loc) {
+    function gpsLink(loc, source) {
         if (!loc) return '<span style="color:var(--text-muted)">-</span>';
         try {
             const [lat, lon] = loc.split(',').map(Number);
             if (isNaN(lat) || isNaN(lon)) return loc;
-            return `<a href="https://maps.google.com/?q=${lat},${lon}" target="_blank" class="link">${lat.toFixed(4)}, ${lon.toFixed(4)}</a>`;
+            const badge = source ? `<span style="font-size:0.75em;color:${source === 'GPS' ? '#4ade80' : '#facc15'};margin-left:6px">(${source})</span>` : '';
+            return `<a href="https://maps.google.com/?q=${lat},${lon}" target="_blank" class="link">${lat.toFixed(4)}, ${lon.toFixed(4)}</a>${badge}`;
         } catch { return loc; }
     }
 
@@ -512,7 +513,7 @@
                 <div class="item"><span class="lbl">Time</span><span class="val">${formatTime(a.timestamp)}</span></div>
                 <div class="item"><span class="lbl">Type</span><span class="val">${typeBadge(a.alert_type)}</span></div>
                 <div class="item"><span class="lbl">Source</span><span class="val">${triggerBadge(a.trigger_source)}</span></div>
-                <div class="item"><span class="lbl">GPS</span><span class="val">${gpsLink(a.gps_location)}</span></div>
+                <div class="item"><span class="lbl">GPS</span><span class="val">${gpsLink(a.gps_location, a.location_source)}</span></div>
                 <div class="item"><span class="lbl">Battery</span><span class="val">${a.battery_percentage != null ? esc(a.battery_percentage) : 'N/A'}</span></div>
                 <div class="item"><span class="lbl">Call Placed</span><span class="val">${statusDot(a.call_placed_status)}</span></div>
                 <div class="item"><span class="lbl">SMS Sent</span><span class="val">${statusDot(a.guardian_sms_status)}</span></div>
@@ -594,7 +595,7 @@
                 <td>${esc(a.device_id)}</td>
                 <td>${typeBadge(a.alert_type)}</td>
                 <td>${triggerBadge(a.trigger_source)}</td>
-                <td>${gpsLink(a.gps_location)}</td>
+                <td>${gpsLink(a.gps_location, a.location_source)}</td>
                 <td>${a.battery_percentage != null ? esc(a.battery_percentage) : '-'}</td>
                 <td>${statusDot(a.call_placed_status)}</td>
                 <td>${statusDot(a.guardian_sms_status)}</td>
