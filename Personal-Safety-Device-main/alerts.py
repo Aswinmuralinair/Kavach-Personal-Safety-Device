@@ -276,13 +276,14 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
     _stop_alert_event.clear()
     logger.info("[SOS] ACTIVATED — trigger: %s", trigger_source)
 
-    # ── Step 0: Start evidence capture immediately ────────────────────────
+    # ── Step 0: Start evidence capture (staggered to avoid memory spike) ──
     if cam:
         cam.start_recording()
         logger.info("[SOS] Camera recording started.")
     if mic:
+        time.sleep(3)  # stagger: let camera process stabilise before opening mic
         mic.start_recording()
-        logger.info("[SOS] Audio recording started.")
+        logger.info("[SOS] Audio recording started (3s after camera).")
 
     config        = _load_config()
     power_monitor = _init_power_monitor()
@@ -403,13 +404,14 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
     _stop_alert_event.clear()
     logger.info("[MEDICAL] ACTIVATED — double press.")
 
-    # ── Step 0: Start evidence capture immediately ────────────────────────
+    # ── Step 0: Start evidence capture (staggered to avoid memory spike) ──
     if cam:
         cam.start_recording()
         logger.info("[MEDICAL] Camera recording started.")
     if mic:
+        time.sleep(3)  # stagger: let camera process stabilise before opening mic
         mic.start_recording()
-        logger.info("[MEDICAL] Audio recording started.")
+        logger.info("[MEDICAL] Audio recording started (3s after camera).")
 
     config        = _load_config()
     power_monitor = _init_power_monitor()

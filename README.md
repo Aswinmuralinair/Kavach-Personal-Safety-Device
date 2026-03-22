@@ -30,13 +30,13 @@ When you run `python main.py` on the Pi, it starts 10 subsystems simultaneously:
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
 5. **Pi Camera** (CSI interface via rpicam-vid) — records 25-second MP4 evidence clips during alerts
-6. **Microphone Recorder** (sounddevice) — records 42-second WAV audio evidence during alerts
+6. **Microphone Recorder** (sounddevice) — records 42-second WAV audio evidence during alerts (auto-disables if no real mic)
 7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices (auto-disables if not connected)
 8. **Config Sync** — polls server every 10s for config changes + sends battery heartbeat
 9. **Power Monitor** (INA219 via I2C) — reads battery voltage for heartbeat reporting
 10. **Keyboard** — `f`, `h`, `a`, `s`, `d`, `l`, `q` keys to simulate sensors (works on Pi and desktop)
 
-If any sensor hardware is not connected, the code **auto-detects** and falls back to a safe no-op mode (sensors use simulators triggered by keyboard, LoRa silently disables).
+If any sensor hardware is not connected, the code **auto-detects** and falls back to a safe no-op mode (sensors use simulators triggered by keyboard, LoRa and audio recorder silently disable if no real hardware detected).
 
 ### Triggers
 
@@ -53,7 +53,7 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 ### SOS Sequence
 
 ```
-Step 1 → START CAMERA + MICROPHONE RECORDING (25-sec video + 42-sec audio clips to evidence/)
+Step 1 → START CAMERA + MICROPHONE RECORDING (25-sec video + 42-sec audio, staggered 3s apart)
 Step 2 → UPLOAD TELEMETRY TO SERVER (immediate, so mobile app sees the alert within 5s)
 Step 3 → CALL POLICE (rings 15 seconds, hangs up)
 Step 4 → SMS to guardian: "SOS ALERT - Emergency triggered"
@@ -355,7 +355,7 @@ Kavach/
 │   │   ├── audio.py                ← YAMNet microphone listener
 │   │   ├── button.py               ← GPIO button with single/double/long press
 │   │   ├── camera.py               ← Pi Camera: 25-sec MP4 clip recording (rpicam-vid)
-│   │   ├── audio_recorder.py       ← Microphone: 42-sec WAV clip recording
+│   │   ├── audio_recorder.py       ← Microphone: 42-sec WAV clip recording (disabled if no real mic)
 │   │   ├── whatsapp.py             ← CallMeBot WhatsApp API wrapper
 │   │   ├── lora.py                 ← SX1278 LoRa mesh radio (disabled if no hardware)
 │   │   └── power.py                ← INA219 battery voltage monitor
@@ -432,7 +432,9 @@ During SOS/MEDICAL alerts, the microphone records 42-second `.wav` clips alongsi
 - 16 kHz mono, 16-bit PCM
 - Saved to `evidence/` folder
 - Encrypted and uploaded with other evidence files
-- Uses `sounddevice` library — falls back to `FakeAudioRecorder` if no mic detected
+- Uses `sounddevice` library — **auto-disables** if no real USB/I2S microphone is detected
+- Rejects virtual devices (PulseAudio "pulse", HDMI outputs, monitor sinks)
+- Camera and audio recording start 3 seconds apart to prevent memory spikes on Pi
 
 ### 4. Offline Upload Queue
 If the server is unreachable during an alert:
@@ -559,3 +561,5 @@ During SOS and MEDICAL alerts:
 | 13 | **start.sh for Pi** | Automated setup script: installs PortAudio, creates venv, pip install, downloads YAMNet, generates key, launches device |
 | 14 | **GPS display fix** | Coordinates rounded to 6 decimal places in app UI |
 | 15 | **LoRa auto-disable** | LoRa silently disables when no SX1278 hardware is connected (no more fake packet simulation or log spam). Auto-activates when hardware is wired |
+| 16 | **Audio recorder auto-disable** | Audio recorder rejects virtual devices (PulseAudio "pulse", HDMI, monitor sinks) and silently disables. Only activates with a real USB/I2S microphone |
+| 17 | **Staggered evidence start** | Camera and audio recording start 3 seconds apart during SOS/MEDICAL to prevent memory spike segfaults on Pi |

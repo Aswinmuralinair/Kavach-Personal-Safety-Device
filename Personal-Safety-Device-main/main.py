@@ -35,7 +35,7 @@ CONCURRENT TRIGGER THREADS (all run from boot, daemon threads):
 
 EVIDENCE CAPTURE (started/stopped per alert, daemon threads):
   CameraManager        — 25-second MP4 clips via rpicam-vid / FakeCameraRecorder
-  AudioRecorderManager — 42-second WAV clips via microphone / FakeAudioRecorder
+  AudioRecorderManager — 42-second WAV clips via real microphone (disabled if no physical mic)
 
 BACKGROUND SERVICES (daemon threads):
   ConfigSync           — polls server every 10s for config changes + sends battery heartbeat

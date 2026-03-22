@@ -5,8 +5,14 @@ Records 42-second .wav audio clips during active alerts for evidence.
 
 Architecture (same Real/Fake pattern as camera.py):
   - RealAudioRecorder  — captures mic input via sounddevice, writes .wav files
-  - FakeAudioRecorder  — no-op fallback when no microphone is available
+  - DisabledAudioRecorder — no-op when no REAL microphone is detected
   - AudioRecorderManager — auto-detects hardware, exposes start/stop API
+
+Hardware detection:
+  - Rejects virtual/monitor audio devices (PulseAudio "pulse", HDMI outputs,
+    monitor sinks) that appear as input devices but are not real microphones.
+  - Only activates when a physical USB or I2S microphone is detected.
+  - If no real mic is found, audio recording is DISABLED (no simulation).
 
 Recording behaviour:
   - When an alert fires (SOS / MEDICAL), start_recording() is called.
@@ -32,6 +38,17 @@ logger = logging.getLogger(__name__)
 SAMPLE_RATE = 16000   # 16 kHz — good balance of quality vs file size
 CHANNELS    = 1       # mono
 DTYPE       = 'int16' # 16-bit PCM
+
+# Virtual/monitor audio device names that are NOT real microphones.
+# PulseAudio, ALSA, and HDMI adapters often expose these as input devices
+# even though they can't capture real audio from a physical microphone.
+_VIRTUAL_DEVICE_KEYWORDS = [
+    'pulse',          # PulseAudio default virtual device
+    'monitor',        # PulseAudio monitor sinks (e.g. "Monitor of Built-in Audio")
+    'hdmi',           # HDMI audio output exposed as input
+    'spdif',          # S/PDIF digital audio
+    'loopback',       # ALSA loopback devices
+]
 
 
 class BaseAudioRecorder(ABC):
@@ -61,13 +78,32 @@ class RealAudioRecorder(BaseAudioRecorder):
         self._stop_event    = threading.Event()
         self._record_thread = None
 
-        # Verify sounddevice is importable and a mic is available
+        # Verify sounddevice is importable and a REAL mic is available
         import sounddevice as sd
         devices = sd.query_devices()
         default_input = sd.default.device[0]
         if default_input is None or default_input < 0:
             raise RuntimeError("No default input device found.")
-        logger.info("[AudioRecorder] sounddevice found. Default input: %s", devices[default_input]['name'])
+
+        device_name = devices[default_input]['name'].strip()
+
+        # Reject virtual/monitor devices that aren't real microphones
+        name_lower = device_name.lower()
+        for keyword in _VIRTUAL_DEVICE_KEYWORDS:
+            if keyword in name_lower:
+                raise RuntimeError(
+                    f"Default input '{device_name}' is a virtual device "
+                    f"(matched '{keyword}') — not a real microphone."
+                )
+
+        # Also reject "default" if it's the only name (no actual hardware name)
+        if name_lower == 'default':
+            raise RuntimeError(
+                "Default input device is named 'default' — likely a virtual "
+                "PulseAudio/ALSA device, not a real microphone."
+            )
+
+        logger.info("[AudioRecorder] Real microphone found: %s", device_name)
 
     def start_recording(self) -> None:
         if self._recording:
@@ -150,20 +186,19 @@ class RealAudioRecorder(BaseAudioRecorder):
         self.stop_recording()
 
 
-class FakeAudioRecorder(BaseAudioRecorder):
-    """No-op fallback when no microphone is available."""
+class DisabledAudioRecorder(BaseAudioRecorder):
+    """No-op — audio recording disabled when no real microphone is detected."""
 
-    def __init__(self):
-        logger.warning(
-            "[FakeAudioRecorder] No microphone detected — SIMULATION mode. "
-            "No audio evidence will be recorded."
+    def __init__(self, reason: str = "no microphone"):
+        logger.info(
+            "[AudioRecorder] DISABLED (%s) — no audio evidence will be recorded.", reason
         )
 
     def start_recording(self) -> None:
-        logger.info("[FakeAudioRecorder] start_recording() called — no mic, skipping.")
+        pass  # silently skip — no log spam
 
     def stop_recording(self) -> None:
-        logger.info("[FakeAudioRecorder] stop_recording() called — nothing to stop.")
+        pass
 
     def shutdown(self) -> None:
         pass
@@ -189,24 +224,14 @@ class AudioRecorderManager:
     def _detect(evidence_dir: str, clip_duration: int) -> BaseAudioRecorder:
         try:
             recorder = RealAudioRecorder(evidence_dir, clip_duration)
-            logger.info("[AudioRecorderManager] Microphone detected — REAL mode.")
+            logger.info("[AudioRecorderManager] Real microphone detected — REAL mode.")
             return recorder
         except ImportError:
-            logger.warning(
-                "[AudioRecorderManager] sounddevice not installed. "
-                "Falling back to FakeAudioRecorder."
-            )
-        except (RuntimeError, OSError) as e:
-            logger.warning(
-                "[AudioRecorderManager] Microphone error (%s). "
-                "Falling back to FakeAudioRecorder.", e
-            )
-        except Exception as e:
-            logger.warning(
-                "[AudioRecorderManager] Unexpected error (%s). "
-                "Falling back to FakeAudioRecorder.", e
-            )
-        return FakeAudioRecorder()
+            return DisabledAudioRecorder("sounddevice not installed")
+        except RuntimeError as e:
+            return DisabledAudioRecorder(str(e))
+        except (OSError, Exception) as e:
+            return DisabledAudioRecorder(str(e))
 
     def start_recording(self) -> None:
         self._recorder.start_recording()
@@ -218,5 +243,7 @@ class AudioRecorderManager:
         self._recorder.shutdown()
 
     def status_string(self) -> str:
-        mode = "REAL (Microphone)" if isinstance(self._recorder, RealAudioRecorder) else "FAKE"
-        return f"AudioRecorder={mode}"
+        if isinstance(self._recorder, RealAudioRecorder):
+            return "AudioRecorder=REAL (Microphone)"
+        else:
+            return "AudioRecorder=disabled (no real mic)"
