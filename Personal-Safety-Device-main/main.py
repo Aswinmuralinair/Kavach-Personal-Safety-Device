@@ -55,6 +55,13 @@ import json
 import os
 
 from enum import Enum, auto
+
+# CRITICAL: import crypto_utils FIRST (before TFLite/audio).
+# The ChaCha20 cipher is created at import time, before XNNPACK + h5py
+# C extensions are loaded.  Creating it later causes a segfault on ARM
+# due to _cffi_backend / OpenSSL memory conflicts.
+import crypto_utils  # noqa: F401 — singleton cipher created at import
+
 from database import Base
 from hardware.button         import ButtonHandler
 from hardware.sensors        import SensorManager

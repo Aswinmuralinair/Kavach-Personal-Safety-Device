@@ -18,34 +18,64 @@ server — generate it once and copy it to both locations:
 """
 
 import os
+import logging
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+
+logger = logging.getLogger(__name__)
 
 
 def _load_chacha_key() -> bytes:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     key_path = os.path.join(base_dir, "keys", "chacha.key")
     with open(key_path, "rb") as f:
-        return f.read()
+        key = f.read()
+    if len(key) != 32:
+        raise ValueError(
+            f"ChaCha20 key must be exactly 32 bytes, got {len(key)}. "
+            "Regenerate with: python -c \"from cryptography.hazmat.primitives."
+            "ciphers.aead import ChaCha20Poly1305; import pathlib; "
+            "pathlib.Path('keys').mkdir(exist_ok=True); "
+            "open('keys/chacha.key','wb').write(ChaCha20Poly1305.generate_key())\""
+        )
+    return key
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SINGLETON CIPHER — created ONCE at import time (before TFLite loads).
+#
+# On Raspberry Pi, creating ChaCha20Poly1305() AFTER TFLite + XNNPACK +
+# h5py + 40 other C extensions are loaded causes a segfault in _cffi_backend
+# (OpenSSL memory conflict on ARM).  By creating the cipher object at import
+# time (early in boot, before TFLite), cffi initialises cleanly.  The same
+# object is reused for all encrypt/decrypt calls — this is thread-safe.
+# ─────────────────────────────────────────────────────────────────────────────
+try:
+    _KEY    = _load_chacha_key()
+    _CHACHA = ChaCha20Poly1305(_KEY)
+    logger.info("[Crypto] ChaCha20-Poly1305 cipher ready (key loaded at import time).")
+except Exception as e:
+    _CHACHA = None
+    logger.error("[Crypto] Failed to initialise ChaCha20: %s", e)
 
 
 def chacha_encrypt_text(plaintext: str) -> bytes:
     """Encrypt a UTF-8 string with ChaCha20-Poly1305.
     Returns: 12-byte nonce + ciphertext (with 16-byte Poly1305 tag).
     """
-    key    = _load_chacha_key()
-    chacha = ChaCha20Poly1305(key)
+    if _CHACHA is None:
+        raise RuntimeError("ChaCha20 cipher not initialised — check keys/chacha.key")
     nonce  = os.urandom(12)   # ChaCha20 requires exactly 12 bytes
-    ciphertext = chacha.encrypt(nonce, plaintext.encode(), None)
+    ciphertext = _CHACHA.encrypt(nonce, plaintext.encode(), None)
     return nonce + ciphertext
 
 
 def chacha_decrypt_text(encrypted_data: bytes) -> str:
     """Decrypt bytes produced by chacha_encrypt_text()."""
-    key        = _load_chacha_key()
-    chacha     = ChaCha20Poly1305(key)
+    if _CHACHA is None:
+        raise RuntimeError("ChaCha20 cipher not initialised — check keys/chacha.key")
     nonce      = encrypted_data[:12]
     ciphertext = encrypted_data[12:]
-    plaintext  = chacha.decrypt(nonce, ciphertext, None)
+    plaintext  = _CHACHA.decrypt(nonce, ciphertext, None)
     return plaintext.decode()
 
 
@@ -57,20 +87,20 @@ def chacha_encrypt_bytes(data: bytes) -> bytes:
     to the server.  The server calls chacha_decrypt_bytes() to recover
     the original file.
     """
-    key    = _load_chacha_key()
-    chacha = ChaCha20Poly1305(key)
+    if _CHACHA is None:
+        raise RuntimeError("ChaCha20 cipher not initialised — check keys/chacha.key")
     nonce  = os.urandom(12)
-    ciphertext = chacha.encrypt(nonce, data, None)
+    ciphertext = _CHACHA.encrypt(nonce, data, None)
     return nonce + ciphertext
 
 
 def chacha_decrypt_bytes(encrypted_data: bytes) -> bytes:
     """Decrypt raw bytes produced by chacha_encrypt_bytes()."""
-    key        = _load_chacha_key()
-    chacha     = ChaCha20Poly1305(key)
+    if _CHACHA is None:
+        raise RuntimeError("ChaCha20 cipher not initialised — check keys/chacha.key")
     nonce      = encrypted_data[:12]
     ciphertext = encrypted_data[12:]
-    return chacha.decrypt(nonce, ciphertext, None)
+    return _CHACHA.decrypt(nonce, ciphertext, None)
 
 
 if __name__ == "__main__":
