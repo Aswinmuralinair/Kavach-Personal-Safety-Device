@@ -207,10 +207,12 @@ class KavachStateMachine:
             except Exception:
                 pass
         # Force garbage collection to reclaim TFLite model memory (~50 MB)
-        # before rpicam-vid subprocess + crypto encryption compete for RAM
+        # before rpicam-vid subprocess + crypto encryption compete for RAM.
+        # The interpreter was explicitly deleted in audio.py shutdown(),
+        # so gc.collect() can now actually free the C-level memory.
         import gc
         gc.collect()
-        time.sleep(1)  # let OS reclaim freed pages
+        time.sleep(2)  # let OS fully reclaim freed pages before crypto runs
         try:
             target_fn(**kwargs)
         except Exception as exc:

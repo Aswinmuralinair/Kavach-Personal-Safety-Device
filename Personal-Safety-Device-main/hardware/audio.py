@@ -358,6 +358,10 @@ class YAMNetDetector(BaseAudioDetector):
                 logger.error("[YAMNet] Callback error: %s", exc)
 
     def start_listening(self, on_detection: Callable[[DetectionEvent], None]) -> None:
+        # Reload TFLite model if it was released during a previous shutdown
+        if self._interpreter is None:
+            logger.info("[YAMNet] Reloading TFLite model...")
+            self._load_model()
         self._callback = on_detection
         self._running  = True
         self._thread   = threading.Thread(target=self._audio_thread,
@@ -371,6 +375,14 @@ class YAMNetDetector(BaseAudioDetector):
 
     def shutdown(self) -> None:
         self.stop_listening()
+        # Explicitly delete the TFLite interpreter to free its C-level memory
+        # (XNNPACK delegate buffers). Without this, the ~50 MB stays allocated
+        # and its memory regions can conflict with cryptography's _cffi_backend
+        # (OpenSSL), causing a segfault during ChaCha20 encryption.
+        if self._interpreter is not None:
+            del self._interpreter
+            self._interpreter = None
+            logger.info("[YAMNet] TFLite interpreter released.")
         logger.info("[YAMNet] Shutdown.")
 
 
