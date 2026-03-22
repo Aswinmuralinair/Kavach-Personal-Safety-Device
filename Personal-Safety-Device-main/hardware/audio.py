@@ -191,7 +191,9 @@ class YAMNetDetector(BaseAudioDetector):
         self._running  = False
         self._callback: Optional[Callable[[DetectionEvent], None]] = None
         self._last_trigger = 0.0
-        self._inferring = False   # guard against thread pile-up on slow hardware
+        self._inferring    = False   # guard against thread pile-up on slow hardware
+        self._infer_lock   = threading.Lock()  # protects interpreter access during inference
+        self._infer_thread: Optional[threading.Thread] = None  # track active inference thread
 
     def initialise(self) -> None:
         self._load_model()
@@ -296,12 +298,14 @@ class YAMNetDetector(BaseAudioDetector):
 
                     # Skip if previous inference is still running (prevents
                     # thread pile-up on slow hardware like the Pi)
-                    if not self._inferring:
-                        threading.Thread(
+                    if not self._inferring and self._running:
+                        t = threading.Thread(
                             target=self._infer_and_fire,
                             args=(snap,),
                             daemon=True
-                        ).start()
+                        )
+                        self._infer_thread = t
+                        t.start()
                     hop_pos = 0
 
         logger.info("[YAMNet] Opening mic stream at %d Hz...", SAMPLE_RATE)
@@ -324,7 +328,13 @@ class YAMNetDetector(BaseAudioDetector):
     def _infer_and_fire(self, waveform: np.ndarray) -> None:
         self._inferring = True
         try:
-            detections = self._run_inference(waveform)
+            # Guard: don't touch the interpreter if shutdown has started
+            if not self._running or self._interpreter is None:
+                return
+            with self._infer_lock:
+                if self._interpreter is None:
+                    return  # interpreter was released while we waited for lock
+                detections = self._run_inference(waveform)
         except Exception as exc:
             logger.error("[YAMNet] Inference error: %s", exc)
             return
@@ -375,14 +385,27 @@ class YAMNetDetector(BaseAudioDetector):
 
     def shutdown(self) -> None:
         self.stop_listening()
-        # Explicitly delete the TFLite interpreter to free its C-level memory
-        # (XNNPACK delegate buffers). Without this, the ~50 MB stays allocated
-        # and its memory regions can conflict with cryptography's _cffi_backend
-        # (OpenSSL), causing a segfault during ChaCha20 encryption.
-        if self._interpreter is not None:
-            del self._interpreter
-            self._interpreter = None
-            logger.info("[YAMNet] TFLite interpreter released.")
+
+        # Wait for any in-flight inference thread to finish BEFORE touching
+        # the interpreter.  Without this, a detached inference thread can
+        # still be using the native TFLite memory when we delete it,
+        # corrupting memory and causing the next C call (ChaCha20) to segfault.
+        if self._infer_thread is not None:
+            self._infer_thread.join(timeout=3.0)
+            self._infer_thread = None
+
+        # Also spin-wait briefly if _inferring flag is still set (belt + suspenders)
+        for _ in range(30):  # up to 3 seconds
+            if not self._inferring:
+                break
+            time.sleep(0.1)
+
+        # Now safe to release the interpreter — no threads are using it
+        with self._infer_lock:
+            if self._interpreter is not None:
+                del self._interpreter
+                self._interpreter = None
+                logger.info("[YAMNet] TFLite interpreter released.")
         logger.info("[YAMNet] Shutdown.")
 
 
