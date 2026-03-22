@@ -31,7 +31,7 @@ CONCURRENT TRIGGER THREADS (all run from boot, daemon threads):
   Thread 2: IMUMonitor         — 10 Hz BNO055/FakeIMU reads
   Thread 3: HeartRateMonitor   — 0.2 Hz MAX30102/FakeHeartRate reads
   Thread 4: YAMNetAudioThread  — continuous mic stream + inference
-  Thread 5: LoRaRX             — continuous SX1278 receive loop
+  Thread 5: LoRaRX             — continuous SX1278 receive loop (disabled if no hardware)
 
 EVIDENCE CAPTURE (started/stopped per alert, daemon threads):
   CameraManager        — 25-second MP4 clips via rpicam-vid / FakeCameraRecorder

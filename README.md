@@ -31,12 +31,12 @@ When you run `python main.py` on the Pi, it starts 10 subsystems simultaneously:
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
 5. **Pi Camera** (CSI interface via rpicam-vid) — records 25-second MP4 evidence clips during alerts
 6. **Microphone Recorder** (sounddevice) — records 42-second WAV audio evidence during alerts
-7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices
+7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices (auto-disables if not connected)
 8. **Config Sync** — polls server every 10s for config changes + sends battery heartbeat
 9. **Power Monitor** (INA219 via I2C) — reads battery voltage for heartbeat reporting
 10. **Keyboard** — `f`, `h`, `a`, `s`, `d`, `l`, `q` keys to simulate sensors (works on Pi and desktop)
 
-If any sensor hardware is not connected, the code **auto-detects** and falls back to a simulator that does nothing until triggered by keyboard.
+If any sensor hardware is not connected, the code **auto-detects** and falls back to a safe no-op mode (sensors use simulators triggered by keyboard, LoRa silently disables).
 
 ### Triggers
 
@@ -301,7 +301,7 @@ Triggers active:
   Audio danger sound   → SOS (YAMNet)
   Camera               → Video evidence recording during alerts
   Microphone           → Audio evidence recording during alerts
-  LoRa RX              → Mesh relay
+  LoRa RX              → Mesh relay (if SX1278 connected)
 
 Keyboard shortcuts (works on Pi and desktop):
   f → Fall detected      h → Heart rate spike
@@ -357,7 +357,7 @@ Kavach/
 │   │   ├── camera.py               ← Pi Camera: 25-sec MP4 clip recording (rpicam-vid)
 │   │   ├── audio_recorder.py       ← Microphone: 42-sec WAV clip recording
 │   │   ├── whatsapp.py             ← CallMeBot WhatsApp API wrapper
-│   │   ├── lora.py                 ← SX1278 LoRa mesh radio
+│   │   ├── lora.py                 ← SX1278 LoRa mesh radio (disabled if no hardware)
 │   │   └── power.py                ← INA219 battery voltage monitor
 │   ├── models/                     ← YAMNet TFLite model (after setup_audio.py)
 │   ├── evidence/                   ← Evidence files: video clips, photos
@@ -558,3 +558,4 @@ During SOS and MEDICAL alerts:
 | 12 | **Evidence file auth fix** | Guardian app now uses signed download URLs. Removed `canLaunchUrl` check for Android 11+ compatibility |
 | 13 | **start.sh for Pi** | Automated setup script: installs PortAudio, creates venv, pip install, downloads YAMNet, generates key, launches device |
 | 14 | **GPS display fix** | Coordinates rounded to 6 decimal places in app UI |
+| 15 | **LoRa auto-disable** | LoRa silently disables when no SX1278 hardware is connected (no more fake packet simulation or log spam). Auto-activates when hardware is wired |
