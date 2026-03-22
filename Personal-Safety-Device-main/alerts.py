@@ -276,15 +276,6 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
     _stop_alert_event.clear()
     logger.info("[SOS] ACTIVATED — trigger: %s", trigger_source)
 
-    # ── Step 0: Start evidence capture (staggered to avoid memory spike) ──
-    if cam:
-        cam.start_recording()
-        logger.info("[SOS] Camera recording started.")
-    if mic:
-        time.sleep(3)  # stagger: let camera process stabilise before opening mic
-        mic.start_recording()
-        logger.info("[SOS] Audio recording started (3s after camera).")
-
     config        = _load_config()
     power_monitor = _init_power_monitor()
     session       = _get_db_session()
@@ -304,13 +295,25 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
     session.add(alert_row)
     session.commit()
 
-    # ── Immediate server upload (telemetry only, no evidence) ───────────────
-    # This lets the mobile app see the alert immediately via polling,
-    # before the slower call/SMS/GPS sequence finishes.
+    # ── Step 0a: Immediate server upload FIRST (lightweight, no evidence) ──
+    # Do this BEFORE starting camera — crypto encryption + HTTP is RAM-heavy
+    # and rpicam-vid subprocess competes for memory on the Pi.
     try:
         sim.upload_alert(config['server_url'], alert_row, file_path=None)
+        logger.info("[SOS] Immediate telemetry upload sent to server.")
     except Exception as exc:
         logger.warning("[SOS] Immediate upload failed: %s — continuing.", exc)
+
+    # ── Step 0b: Start evidence capture AFTER upload completes ─────────────
+    # Camera subprocess (rpicam-vid) uses GPU RAM; starting it after the
+    # upload + gc.collect() in _run_alert() prevents memory spike segfaults.
+    if cam:
+        cam.start_recording()
+        logger.info("[SOS] Camera recording started.")
+    if mic:
+        time.sleep(3)  # stagger: let camera process stabilise before opening mic
+        mic.start_recording()
+        logger.info("[SOS] Audio recording started (3s after camera).")
 
     # ── Step 1: Call police ───────────────────────────────────────────────────
     try:
@@ -404,15 +407,6 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
     _stop_alert_event.clear()
     logger.info("[MEDICAL] ACTIVATED — double press.")
 
-    # ── Step 0: Start evidence capture (staggered to avoid memory spike) ──
-    if cam:
-        cam.start_recording()
-        logger.info("[MEDICAL] Camera recording started.")
-    if mic:
-        time.sleep(3)  # stagger: let camera process stabilise before opening mic
-        mic.start_recording()
-        logger.info("[MEDICAL] Audio recording started (3s after camera).")
-
     config        = _load_config()
     power_monitor = _init_power_monitor()
     session       = _get_db_session()
@@ -432,11 +426,21 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
     session.add(alert_row)
     session.commit()
 
-    # ── Immediate server upload (telemetry only, no evidence) ───────────────
+    # ── Step 0a: Immediate server upload FIRST (lightweight, no evidence) ──
     try:
         sim.upload_alert(config['server_url'], alert_row, file_path=None)
+        logger.info("[MEDICAL] Immediate telemetry upload sent to server.")
     except Exception as exc:
         logger.warning("[MEDICAL] Immediate upload failed: %s — continuing.", exc)
+
+    # ── Step 0b: Start evidence capture AFTER upload completes ─────────────
+    if cam:
+        cam.start_recording()
+        logger.info("[MEDICAL] Camera recording started.")
+    if mic:
+        time.sleep(3)  # stagger: let camera process stabilise before opening mic
+        mic.start_recording()
+        logger.info("[MEDICAL] Audio recording started (3s after camera).")
 
     # ── Step 1: Call ambulance / medical contact ──────────────────────────────
     try:

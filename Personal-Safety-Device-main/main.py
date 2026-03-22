@@ -199,13 +199,18 @@ class KavachStateMachine:
         when the sequence ends (either naturally or via safe_sequence).
         Pauses YAMNet during the alert to free RAM for evidence encryption/upload.
         """
-        # Pause YAMNet to free memory for evidence encryption + upload
+        # Pause YAMNet and force-free TFLite memory before starting camera
         if self._audio_manager:
             try:
                 self._audio_manager.stop()
                 logger.info("[StateMachine] YAMNet paused to free RAM for evidence processing.")
             except Exception:
                 pass
+        # Force garbage collection to reclaim TFLite model memory (~50 MB)
+        # before rpicam-vid subprocess + crypto encryption compete for RAM
+        import gc
+        gc.collect()
+        time.sleep(1)  # let OS reclaim freed pages
         try:
             target_fn(**kwargs)
         except Exception as exc:
