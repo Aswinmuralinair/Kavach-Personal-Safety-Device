@@ -4,9 +4,9 @@ LoRa off-grid backup communication using the SX1278 module.
 
 Same plug-and-play pattern as sensors.py, audio.py, and button.py:
     LoRaManager tries to import spidev and initialise the SX1278 first.
-    If the hardware is not wired (ImportError / RuntimeError), it falls
-    back to LoRaSimulator which logs packets to the console instead.
-    alerts.py never needs to know which one is running.
+    If the hardware is not wired (ImportError / RuntimeError), LoRa is
+    simply disabled (no simulation, no fake packets, no log spam).
+    When the SX1278 is wired and spidev is installed, it auto-activates.
 
 ─────────────────────────────────────────────────────────────────────────────
 WHEN LORA IS USED:
@@ -542,127 +542,28 @@ class SX1278LoRa(BaseLoRa):
 # FAKE / Simulator — for testing without hardware
 # ─────────────────────────────────────────────────────────────────────────────
 
-class LoRaSimulator(BaseLoRa):
+class DisabledLoRa(BaseLoRa):
     """
-    Software simulation of the LoRa radio for desktop/laptop testing.
-
-    TX: logs the packet as if it was transmitted.
-    RX: fires a simulated SOS packet every ~120 seconds so you can
-        test the full receive + relay pipeline without real hardware.
-
-    Call lora_manager.simulate_receive("SOS") to inject a fake incoming
-    packet immediately during testing.
+    No-op stub when SX1278 hardware is not connected.
+    Does nothing — no simulation, no fake packets, no log spam.
+    LoRa features are simply unavailable until real hardware is wired.
     """
-
-    SIM_RX_INTERVAL = 120   # seconds between auto-simulated incoming packets
-
-    def __init__(self):
-        self._rx_thread:  Optional[threading.Thread] = None
-        self._rx_running  = False
-        self._rx_callback: Optional[Callable[[LoRaPacket], None]] = None
-        self._wake        = threading.Event()
-        self._pending_rx: Optional[LoRaPacket] = None
-        self._tx_count    = 0
-        self._rx_count    = 0
 
     def initialise(self) -> None:
-        logger.warning(
-            "[LoRaSimulator] No SX1278 hardware detected — SIMULATION mode. "
-            "TX packets will be logged. Simulated RX fires every ~%ds.",
-            self.SIM_RX_INTERVAL
-        )
+        logger.info("[LoRa] No SX1278 hardware — LoRa DISABLED (no simulation).")
 
     def send_packet(self, packet: LoRaPacket) -> bool:
-        self._tx_count += 1
-        payload = packet.to_bytes()
-        logger.info(
-            "[LoRaSimulator] ═══ TX #%d ═══\n"
-            "  Type:     %s\n"
-            "  Device:   %s\n"
-            "  Trigger:  %s\n"
-            "  GPS:      %s\n"
-            "  Battery:  %s\n"
-            "  Timestamp:%s\n"
-            "  Hop:      %d\n"
-            "  Checksum: %s\n"
-            "  Size:     %d bytes\n"
-            "  ════════════════",
-            self._tx_count,
-            packet.packet_type, packet.device_id, packet.trigger,
-            packet.gps_location, packet.battery, packet.timestamp,
-            packet.hop_count, packet.checksum, len(payload)
-        )
-        return True   # always "succeeds" in simulation
-
-    def _rx_loop(self) -> None:
-        logger.info("[LoRaSimulator] RX simulation loop started.")
-        while self._rx_running:
-            self._wake.wait(timeout=self.SIM_RX_INTERVAL)
-            if not self._rx_running:
-                break
-            self._wake.clear()
-
-            if self._pending_rx:
-                packet = self._pending_rx
-                self._pending_rx = None
-                logger.info("[LoRaSimulator] Manual RX inject: %s", packet)
-            else:
-                # Auto-generate a simulated SOS packet so the main handler's
-                # SOS/MEDICAL/SAFE relay logic is exercised during testing
-                packet = LoRaPacket(
-                    packet_type="SOS",
-                    device_id="KAVACH-SIM-002",
-                    trigger="auto_simulation",
-                    gps_location="12.9716,77.5946",   # Bangalore coords
-                    battery="72%",
-                    timestamp=datetime.now(timezone.utc).isoformat(),
-                    hop_count=1,
-                )
-                logger.info("[LoRaSimulator] AUTO RX: simulated SOS packet.")
-
-            self._rx_count += 1
-            if self._rx_callback:
-                try:
-                    self._rx_callback(packet)
-                except Exception as exc:
-                    logger.error("[LoRaSimulator] RX callback error: %s", exc)
+        logger.debug("[LoRa] send_packet() skipped — no hardware.")
+        return False
 
     def start_receiving(self, on_packet_received: Callable[[LoRaPacket], None]) -> None:
-        self._rx_callback = on_packet_received
-        self._rx_running  = True
-        self._rx_thread   = threading.Thread(
-            target=self._rx_loop, name="LoRaSimRX", daemon=True
-        )
-        self._rx_thread.start()
+        pass  # no-op
 
     def stop_receiving(self) -> None:
-        self._rx_running = False
-        self._wake.set()
-        if self._rx_thread:
-            self._rx_thread.join(timeout=2.0)
+        pass  # no-op
 
     def shutdown(self) -> None:
-        self.stop_receiving()
-        logger.info(
-            "[LoRaSimulator] Shutdown. TX sent: %d  RX received: %d",
-            self._tx_count, self._rx_count
-        )
-
-    def simulate_receive(self, packet_type: str = "SOS",
-                         device_id: str = "KAVACH-TEST",
-                         gps: str = "12.9716,77.5946") -> None:
-        """Inject a fake incoming packet for testing. Works only in simulation."""
-        self._pending_rx = LoRaPacket(
-            packet_type=packet_type,
-            device_id=device_id,
-            trigger="test_inject",
-            gps_location=gps,
-            battery="55%",
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            hop_count=0,
-        )
-        self._wake.set()
-        logger.info("[LoRaSimulator] Injected fake RX: %s from %s", packet_type, device_id)
+        pass  # no-op
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -710,21 +611,26 @@ class LoRaManager:
             logger.info("[LoRaManager] SX1278 real hardware active.")
             return radio
         except ImportError as e:
-            logger.warning("[LoRaManager] Missing library (%s) — LoRaSimulator.", e)
+            logger.info("[LoRaManager] SX1278 library not installed (%s) — LoRa disabled.", e)
         except RuntimeError as e:
-            logger.warning("[LoRaManager] Hardware error (%s) — LoRaSimulator.", e)
+            logger.info("[LoRaManager] SX1278 not found (%s) — LoRa disabled.", e)
         except Exception as e:
-            logger.warning("[LoRaManager] Unexpected error (%s) — LoRaSimulator.", e)
+            logger.info("[LoRaManager] SX1278 error (%s) — LoRa disabled.", e)
 
-        sim = LoRaSimulator()
-        sim.initialise()
-        return sim
+        disabled = DisabledLoRa()
+        disabled.initialise()
+        return disabled
+
+    @property
+    def is_available(self) -> bool:
+        """True if real SX1278 hardware is active."""
+        return isinstance(self.radio, SX1278LoRa)
 
     def start(self, on_packet_received: Optional[Callable[[LoRaPacket], None]] = None) -> None:
         """Start background RX listening. Pass None to skip RX (TX-only mode)."""
-        if on_packet_received:
+        if on_packet_received and self.is_available:
             self.radio.start_receiving(on_packet_received)
-        mode = "REAL (SX1278)" if isinstance(self.radio, SX1278LoRa) else "FAKE (simulation)"
+        mode = "REAL (SX1278)" if self.is_available else "DISABLED (no hardware)"
         logger.info("[LoRaManager] Started in %s mode.", mode)
 
     def stop(self) -> None:
@@ -783,12 +689,6 @@ class LoRaManager:
         return False
 
     def status_string(self) -> str:
-        mode = "SX1278/real" if isinstance(self.radio, SX1278LoRa) else "simulated"
-        return f"LoRa={mode} | Freq={LORA_FREQUENCY_MHZ}MHz | SF={LORA_SPREADING_FACTOR}"
-
-    def simulate_receive(self, packet_type: str = "SOS") -> None:
-        """Test helper — inject a fake incoming packet. Simulation only."""
-        if isinstance(self.radio, LoRaSimulator):
-            self.radio.simulate_receive(packet_type)
-        else:
-            logger.warning("[LoRaManager] simulate_receive() only works in fake mode.")
+        if self.is_available:
+            return f"LoRa=SX1278/real | Freq={LORA_FREQUENCY_MHZ}MHz | SF={LORA_SPREADING_FACTOR}"
+        return "LoRa=disabled (no hardware)"
