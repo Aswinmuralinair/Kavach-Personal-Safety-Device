@@ -5,6 +5,7 @@ import 'alerts_screen.dart';
 import 'location_screen.dart';
 import 'settings_screen.dart';
 import 'dashboard_screen.dart';
+import 'guardian_manage_screen.dart';
 
 class UserHomeScreen extends StatefulWidget {
   const UserHomeScreen({super.key});
@@ -20,6 +21,7 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     UserDashboardScreen(),
     UserAlertsScreen(),
     UserLocationScreen(),
+    GuardianManageScreen(),
     UserSettingsScreen(),
   ];
 
@@ -85,6 +87,11 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
             icon: Icon(Icons.map_outlined),
             selectedIcon: Icon(Icons.map),
             label: 'Location',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.shield_outlined),
+            selectedIcon: Icon(Icons.shield),
+            label: 'Guardians',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),

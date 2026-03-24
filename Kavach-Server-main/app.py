@@ -1,25 +1,41 @@
 """
-app.py - Kavach Server
+app.py — Kavach Server v4.0
 
-Flask API with admin dashboard, mobile app auth, and device telemetry.
-All data routes are authenticated — no public access to alert data,
-evidence files, or device configuration.
+Flask API with admin dashboard, mobile app auth, device telemetry,
+real-time SocketIO communication, evidence chain ledger, and FCM
+push notifications. All data routes are authenticated.
 
-  GET  /                   - admin dashboard (session login required)
-  POST /api/alerts         - receive encrypted telemetry + evidence (ChaCha20 = implicit auth)
-  GET  /api/alerts         - list alerts (admin session or Bearer token)
-  GET  /api/alerts/<id>    - alert detail + hash verification (admin session or Bearer token)
-  GET  /api/health         - server + database health check (public)
-  GET  /uploads/<file>     - serve evidence files (auth or signed download token)
-  POST /api/auth/signup    - create mobile app account (user/guardian)
-  POST /api/auth/login     - get auth token for mobile app
-  GET  /api/user/alerts    - user's alerts (Bearer token, user role)
-  GET  /api/guardian/alerts - guardian's alerts (Bearer token, guardian role)
-  GET  /api/user/locations - location history (Bearer token, user role)
-  GET  /api/user/config    - get device phone numbers (Bearer token, user role)
-  PUT  /api/user/config    - update phone numbers from app (Bearer token, user role)
-  GET  /api/device/config/<device_id> - Pi polls this (X-Device-Key header)
-  GET  /api/guardian/evidence/<id> - evidence files (Bearer token, guardian role)
+Core endpoints:
+  GET  /                          — admin dashboard (session login)
+  POST /api/alerts                — receive encrypted telemetry + evidence
+  GET  /api/alerts                — list alerts (auth required)
+  GET  /api/alerts/<id>           — alert detail + hash verification
+  GET  /api/health                — server + database health check
+  GET  /uploads/<file>            — serve evidence files (auth or signed token)
+
+Auth endpoints:
+  POST /api/auth/signup           — create mobile app account (user/guardian)
+  POST /api/auth/login            — get auth token for mobile app
+  PUT  /api/auth/fcm-token        — register FCM push notification token
+
+Role-based endpoints:
+  GET  /api/user/alerts           — user's alerts (Bearer token)
+  GET  /api/guardian/alerts       — guardian's alerts (Bearer token)
+  GET  /api/user/locations        — location history
+  GET  /api/user/config           — get device phone numbers
+  PUT  /api/user/config           — update phone numbers from app
+  GET  /api/device/config/<id>    — Pi config polling (X-Device-Key)
+  GET  /api/guardian/evidence/<id>— evidence files (guardian role)
+
+Evidence Chain Ledger (Blueprint):
+  GET  /api/evidence/alert/<id>   — list evidence for an alert
+  GET  /api/evidence/<id>/verify  — verify individual evidence hash
+  GET  /api/evidence/ledger/verify— verify entire ledger integrity
+
+SocketIO events:
+  join_device  — app subscribes to device room for real-time updates
+  gps_update   — device emits GPS coordinates (broadcast to room)
+  alert_event  — real-time alert broadcast to subscribers
 """
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, session, redirect, url_for
@@ -37,9 +53,11 @@ import webbrowser
 import threading
 import subprocess
 
-from database import DB, Alert
+from database import DB, Alert, Evidence, GuardianLink
 from utils import save_file_safe, compute_sha256, decrypt_file_in_place
 from crypto_utils import chacha_decrypt_text
+from evidence import file_type_from_ext, append_to_ledger
+from notifications import notify_device_alerts, store_fcm_token
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging - structured, goes to stdout (visible in server terminal)
@@ -63,6 +81,21 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH']             = 64 * 1024 * 1024   # 64 MB max upload
 
 DB.init_app(app)
+
+# ── SocketIO — real-time communication (GPS streaming, live alerts) ────────
+try:
+    from flask_socketio import SocketIO, emit, join_room
+    socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
+    _SOCKETIO_AVAILABLE = True
+    logger.info("[SocketIO] Initialized — real-time communication enabled.")
+except ImportError:
+    socketio = None
+    _SOCKETIO_AVAILABLE = False
+    logger.warning("[SocketIO] flask-socketio not installed — running without real-time features.")
+
+# ── Register Blueprints ───────────────────────────────────────────────────
+from blueprints.evidence_bp import evidence_bp
+app.register_blueprint(evidence_bp)
 
 _APP_DIR   = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(_APP_DIR, 'uploads')
@@ -420,6 +453,203 @@ def auth_login():
         return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
+@app.route('/api/auth/fcm-token', methods=['PUT'])
+def update_fcm_token():
+    """
+    Register or update the FCM push notification token for this user.
+    Accepts: { "fcm_token": "..." }
+    The app calls this after login or when the FCM token refreshes.
+    """
+    try:
+        device_id, role = _verify_token(request)
+        body = request.get_json()
+        if not body or not body.get('fcm_token'):
+            return jsonify({'status': 'error', 'message': 'fcm_token is required'}), 400
+
+        store_fcm_token(device_id, role, body['fcm_token'])
+        return jsonify({'status': 'ok', 'message': 'FCM token registered'}), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Guardian Invite System
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/api/auth/guardian/invite', methods=['POST'])
+def invite_guardian():
+    """
+    User invites a guardian by specifying the guardian's device_id.
+    Creates a GuardianLink with status='pending'.
+    The guardian must have a guardian account for that device_id.
+    Accepts: { "guardian_device_id": "KAVACH-001" }
+    """
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'user':
+            return jsonify({'status': 'error', 'message': 'Only user accounts can invite guardians'}), 403
+
+        body = request.get_json()
+        if not body or not body.get('guardian_device_id'):
+            return jsonify({'status': 'error', 'message': 'guardian_device_id is required'}), 400
+
+        guardian_device_id = body['guardian_device_id'].strip()
+
+        # Check the guardian account exists
+        users = _load_app_users()
+        guardian_key = f"{guardian_device_id}_guardian"
+        if guardian_key not in users:
+            return jsonify({
+                'status': 'error',
+                'message': f'No guardian account found for device {guardian_device_id}. '
+                           f'The guardian must sign up first.',
+            }), 404
+
+        # Check for duplicate invite
+        existing = GuardianLink.query.filter_by(
+            user_device_id=device_id,
+            guardian_device_id=guardian_device_id,
+        ).filter(GuardianLink.status.in_(['pending', 'active'])).first()
+
+        if existing:
+            return jsonify({
+                'status': 'error',
+                'message': f'An invite already exists (status: {existing.status})',
+            }), 409
+
+        link = GuardianLink(
+            user_device_id=device_id,
+            guardian_device_id=guardian_device_id,
+            status='pending',
+        )
+        DB.session.add(link)
+        DB.session.commit()
+
+        # Notify the guardian via FCM
+        notify_device_alerts(
+            guardian_device_id,
+            title='Guardian Invite',
+            body=f'Device {device_id} has invited you as a guardian.',
+            data={'type': 'guardian_invite', 'link_id': str(link.id)},
+        )
+
+        logger.info("[Guardian] Invite sent: %s → %s (link_id=%d)", device_id, guardian_device_id, link.id)
+        return jsonify({'status': 'ok', 'link': link.to_dict()}), 201
+
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/auth/guardian/respond', methods=['POST'])
+def respond_to_invite():
+    """
+    Guardian accepts or rejects a pending invite.
+    Accepts: { "link_id": 1, "accept": true }
+    """
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'guardian':
+            return jsonify({'status': 'error', 'message': 'Only guardian accounts can respond to invites'}), 403
+
+        body = request.get_json()
+        if not body or 'link_id' not in body:
+            return jsonify({'status': 'error', 'message': 'link_id is required'}), 400
+
+        link = DB.session.get(GuardianLink, body['link_id'])
+        if not link:
+            return jsonify({'status': 'error', 'message': 'Invite not found'}), 404
+
+        if link.guardian_device_id != device_id:
+            return jsonify({'status': 'error', 'message': 'This invite is not for you'}), 403
+
+        if link.status != 'pending':
+            return jsonify({'status': 'error', 'message': f'Invite already {link.status}'}), 400
+
+        accept = body.get('accept', False)
+        link.status = 'active' if accept else 'revoked'
+        DB.session.commit()
+
+        # Notify the user
+        action = 'accepted' if accept else 'declined'
+        notify_device_alerts(
+            link.user_device_id,
+            title=f'Guardian {action.title()}',
+            body=f'Guardian on device {device_id} has {action} your invite.',
+            data={'type': 'guardian_response', 'link_id': str(link.id), 'action': action},
+        )
+
+        logger.info("[Guardian] Invite %s: link_id=%d by %s", action, link.id, device_id)
+        return jsonify({'status': 'ok', 'link': link.to_dict()}), 200
+
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/auth/guardian/links', methods=['GET'])
+def list_guardian_links():
+    """
+    List all guardian links for the authenticated user.
+    - User role: shows all guardians linked to their device
+    - Guardian role: shows all devices they are guarding
+    """
+    try:
+        device_id, role = _verify_token(request)
+
+        if role == 'user':
+            links = GuardianLink.query.filter_by(user_device_id=device_id).all()
+        else:
+            links = GuardianLink.query.filter_by(guardian_device_id=device_id).all()
+
+        return jsonify({
+            'status': 'ok',
+            'count': len(links),
+            'links': [l.to_dict() for l in links],
+        }), 200
+
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
+@app.route('/api/auth/guardian/revoke', methods=['POST'])
+def revoke_guardian():
+    """
+    User or guardian can revoke an active link.
+    Accepts: { "link_id": 1 }
+    """
+    try:
+        device_id, role = _verify_token(request)
+        body = request.get_json()
+        if not body or 'link_id' not in body:
+            return jsonify({'status': 'error', 'message': 'link_id is required'}), 400
+
+        link = DB.session.get(GuardianLink, body['link_id'])
+        if not link:
+            return jsonify({'status': 'error', 'message': 'Link not found'}), 404
+
+        # Either the user or guardian can revoke
+        if link.user_device_id != device_id and link.guardian_device_id != device_id:
+            return jsonify({'status': 'error', 'message': 'Access denied'}), 403
+
+        link.status = 'revoked'
+        DB.session.commit()
+
+        logger.info("[Guardian] Link revoked: link_id=%d by %s (%s)", link.id, device_id, role)
+        return jsonify({'status': 'ok', 'link': link.to_dict()}), 200
+
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
 @app.route('/api/user/alerts', methods=['GET'])
 def user_alerts():
     """All alerts for the authenticated user's device."""
@@ -742,30 +972,115 @@ def receive_alert():
         # ── 7. Resolve GPS location field (device may use either key) ─────────
         location_data = data.get('gps_location') or data.get('location')
 
-        # ── 8. Write to database ──────────────────────────────────────────────
-        new_alert = Alert(
-            device_id           = device_id,
-            timestamp           = datetime.datetime.now(_UTC),
-            alert_type          = data.get('alert_type'),
-            trigger_source      = data.get('trigger_source'),
-            call_placed_status  = str(data.get('call_placed_status',  'false')).lower() == 'true',
-            guardian_sms_status = str(data.get('guardian_sms_status', 'false')).lower() == 'true',
-            location_sms_status = str(data.get('location_sms_status', 'false')).lower() == 'true',
-            gps_location        = location_data,
-            location_source     = data.get('location_source'),
-            battery_percentage  = data.get('battery_percentage'),
-            uploaded_files      = ','.join(saved_filenames),
-            file_hashes         = hash_summary or None,
-        )
-        DB.session.add(new_alert)
-        DB.session.commit()
-        logger.info("[%s] Alert saved to DB - id=%d", rid, new_alert.id)
+        # ── 8. Write to database (UPDATE existing or CREATE new) ─────────────
+        incoming_alert_id = data.get('alert_id')
+        existing_alert = None
 
-        # ── 9. Build response ─────────────────────────────────────────────────
+        if incoming_alert_id is not None:
+            try:
+                existing_alert = Alert.query.filter_by(
+                    id=int(incoming_alert_id), device_id=device_id
+                ).first()
+            except (ValueError, TypeError):
+                pass  # invalid alert_id — fall through to create new
+            if existing_alert:
+                logger.info("[%s] Updating existing alert id=%d", rid, existing_alert.id)
+            else:
+                logger.warning("[%s] alert_id=%s not found for device=%s — creating new.",
+                               rid, incoming_alert_id, device_id)
+
+        if existing_alert:
+            # Append uploaded files
+            if saved_filenames:
+                prev = existing_alert.uploaded_files or ""
+                existing_alert.uploaded_files = (prev + ",".join(saved_filenames) + ",") if prev else ",".join(saved_filenames)
+            # Append file hashes
+            if hash_summary:
+                prev_h = existing_alert.file_hashes or ""
+                existing_alert.file_hashes = (prev_h + "," + hash_summary) if prev_h else hash_summary
+            # Update fields only if the new value is truthy
+            if location_data:
+                existing_alert.gps_location = location_data
+            if data.get('location_source'):
+                existing_alert.location_source = data['location_source']
+            if data.get('battery_percentage'):
+                existing_alert.battery_percentage = data['battery_percentage']
+            if str(data.get('call_placed_status', 'false')).lower() == 'true':
+                existing_alert.call_placed_status = True
+            if str(data.get('guardian_sms_status', 'false')).lower() == 'true':
+                existing_alert.guardian_sms_status = True
+            if str(data.get('location_sms_status', 'false')).lower() == 'true':
+                existing_alert.location_sms_status = True
+            DB.session.commit()
+            alert_obj = existing_alert
+            logger.info("[%s] Alert updated in DB - id=%d", rid, alert_obj.id)
+        else:
+            alert_obj = Alert(
+                device_id           = device_id,
+                timestamp           = datetime.datetime.now(_UTC),
+                alert_type          = data.get('alert_type'),
+                trigger_source      = data.get('trigger_source'),
+                call_placed_status  = str(data.get('call_placed_status',  'false')).lower() == 'true',
+                guardian_sms_status = str(data.get('guardian_sms_status', 'false')).lower() == 'true',
+                location_sms_status = str(data.get('location_sms_status', 'false')).lower() == 'true',
+                gps_location        = location_data,
+                location_source     = data.get('location_source'),
+                battery_percentage  = data.get('battery_percentage'),
+                uploaded_files      = ','.join(saved_filenames),
+                file_hashes         = hash_summary or None,
+            )
+            DB.session.add(alert_obj)
+            DB.session.commit()
+            logger.info("[%s] Alert saved to DB - id=%d", rid, alert_obj.id)
+
+        # ── 9. Evidence Chain Ledger — create Evidence records + append to ledger
+        for fname, info in hash_results.items():
+            fpath = os.path.join(UPLOAD_DIR, fname)
+            ftype = file_type_from_ext(fname)
+            fsize = os.path.getsize(fpath) if os.path.exists(fpath) else 0
+
+            ev = Evidence(
+                alert_id=alert_obj.id,
+                file_path=fpath,
+                filename=fname,
+                sha256_hash=info['computed'],
+                file_type=ftype,
+                file_size=fsize,
+            )
+            DB.session.add(ev)
+            DB.session.commit()
+
+            # Append to the integrity chain ledger
+            append_to_ledger(ev.id, info['computed'], fpath, alert_obj.id)
+
+        # ── 10. FCM push notification to user + guardian apps ────────────────
+        alert_type = data.get('alert_type', 'ALERT')
+        notify_device_alerts(
+            device_id,
+            title=f'{alert_type} Alert — Kavach',
+            body=f'Alert from device {device_id}. Check the app for details.',
+            data={'alert_id': str(alert_obj.id), 'type': alert_type},
+        )
+
+        # ── 11. SocketIO broadcast to subscribed app clients ────────────────
+        if _SOCKETIO_AVAILABLE:
+            try:
+                socketio.emit('alert', {
+                    'alert_id': alert_obj.id,
+                    'device_id': device_id,
+                    'alert_type': alert_type,
+                    'gps_location': location_data,
+                    'battery': data.get('battery_percentage'),
+                    'timestamp': datetime.datetime.now(_UTC).isoformat(),
+                }, room=f'device_{device_id}')
+            except Exception:
+                pass  # don't fail the upload for SocketIO errors
+
+        # ── 12. Build response ───────────────────────────────────────────────
         response = {
             'status':       'ok',
             'request_id':   rid,
-            'alert_id':     new_alert.id,
+            'alert_id':     alert_obj.id,
             'saved_files':  saved_filenames,
             'hash_results': hash_results,
         }
@@ -802,7 +1117,7 @@ def health():
         return jsonify({
             'status':        'ok',
             'server':        'Kavach API',
-            'version':       '3.3',
+            'version':       '4.0',
             'uptime_seconds': uptime_seconds,
             'uptime_human':  _format_uptime(uptime_seconds),
             'database': {
@@ -977,6 +1292,60 @@ def uploaded_file(filename):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SocketIO events — real-time GPS streaming and alert broadcast
+# ─────────────────────────────────────────────────────────────────────────────
+if _SOCKETIO_AVAILABLE:
+
+    @socketio.on('connect')
+    def handle_connect(auth=None):
+        """Client connected to SocketIO."""
+        logger.info('[SocketIO] Client connected')
+
+    @socketio.on('join_device')
+    def handle_join_device(data):
+        """App client subscribes to a device room for real-time updates."""
+        device_id = data.get('device_id') if isinstance(data, dict) else None
+        if device_id:
+            join_room(f'device_{device_id}')
+            emit('joined', {'device_id': device_id, 'status': 'subscribed'})
+            logger.info('[SocketIO] Client joined room: device_%s', device_id)
+
+    @socketio.on('gps_update')
+    def handle_gps_update(data):
+        """
+        Device sends GPS coordinates. Server broadcasts to subscribed app clients.
+        Expected data: { device_id, lat, lng, battery, signal }
+        """
+        device_id = data.get('device_id')
+        lat = data.get('lat')
+        lng = data.get('lng')
+        battery = data.get('battery')
+
+        if not device_id or lat is None or lng is None:
+            return
+
+        # Update in-memory device status (same as config poll heartbeat)
+        if battery:
+            _update_device_status(device_id, str(battery))
+
+        # Broadcast to all subscribers of this device
+        emit('location', {
+            'device_id': device_id,
+            'lat': lat,
+            'lng': lng,
+            'battery': battery,
+            'timestamp': datetime.datetime.now(_UTC).isoformat(),
+        }, room=f'device_{device_id}')
+
+    @socketio.on('alert_event')
+    def handle_alert_event(data):
+        """Real-time alert broadcast to all subscribers of this device."""
+        device_id = data.get('device_id')
+        if device_id:
+            emit('alert', data, room=f'device_{device_id}')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Ngrok tunnel helper
 # ─────────────────────────────────────────────────────────────────────────────
 NGROK_DOMAIN = "unpropitious-braelyn-blossomy.ngrok-free.dev"
@@ -1035,27 +1404,22 @@ if __name__ == '__main__':
     with app.app_context():
         DB.create_all()
 
-    logger.info("=" * 55)
-    logger.info(" Kavach Server v3.3 starting")
+    logger.info("=" * 60)
+    logger.info(" Kavach Server v4.0 starting")
     logger.info(" Database: kavach.db")
     logger.info(" Upload dir: %s", UPLOAD_DIR)
+    logger.info(" SocketIO: %s", "ENABLED" if _SOCKETIO_AVAILABLE else "DISABLED")
+    logger.info(" FCM: %s", "configured" if os.environ.get('FIREBASE_CREDENTIALS') else "stub mode")
     logger.info(" Endpoints:")
-    logger.info("   GET  /                  - admin dashboard (login required)")
-    logger.info("   GET  /login             - admin login page")
-    logger.info("   GET  /logout            - admin logout")
-    logger.info("   POST /api/alerts          - receive telemetry")
-    logger.info("   GET  /api/alerts          - list all alerts")
-    logger.info("   GET  /api/alerts/<id>     - alert detail + hash check")
-    logger.info("   GET  /api/health          - server health")
-    logger.info("   GET  /uploads/<file>      - serve evidence")
-    logger.info("   POST /api/auth/signup     - create app account")
-    logger.info("   POST /api/auth/login      - app auth token")
-    logger.info("   GET  /api/user/alerts     - user alerts (app)")
-    logger.info("   GET  /api/guardian/alerts  - guardian alerts (app)")
-    logger.info("   GET  /api/user/config     - get phone numbers (app)")
-    logger.info("   PUT  /api/user/config     - update phone numbers (app)")
-    logger.info("   GET  /api/device/config   - Pi config polling")
-    logger.info("=" * 55)
+    logger.info("   POST /api/alerts              — receive telemetry")
+    logger.info("   GET  /api/alerts              — list all alerts")
+    logger.info("   GET  /api/alerts/<id>         — alert detail + hash check")
+    logger.info("   GET  /api/health              — server health")
+    logger.info("   PUT  /api/auth/fcm-token      — register FCM token")
+    logger.info("   GET  /api/evidence/alert/<id> — evidence list per alert")
+    logger.info("   GET  /api/evidence/<id>/verify— verify evidence hash")
+    logger.info("   GET  /api/evidence/ledger/verify — verify ledger chain")
+    logger.info("=" * 60)
 
     # Start ngrok tunnel in the background
     _start_ngrok(8080)
@@ -1070,6 +1434,9 @@ if __name__ == '__main__':
 
     threading.Thread(target=_open_browser, daemon=True).start()
 
-    # debug=False in production - debug=True exposes the Werkzeug interactive
-    # debugger which allows arbitrary code execution.
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    # Use SocketIO runner if available (enables WebSocket support),
+    # otherwise fall back to plain Flask
+    if _SOCKETIO_AVAILABLE:
+        socketio.run(app, host='0.0.0.0', port=8080, debug=False)
+    else:
+        app.run(host='0.0.0.0', port=8080, debug=False)

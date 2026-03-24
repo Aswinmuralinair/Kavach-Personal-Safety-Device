@@ -259,7 +259,7 @@ class SIM7600:
             return None
 
     # ── Evidence upload ───────────────────────────────────────────────────────
-    def upload_alert(self, server_url, alert_object, file_path):
+    def upload_alert(self, server_url, alert_object, file_path, server_alert_id=None):
         """
         Encrypts the alert telemetry AND evidence file with ChaCha20-Poly1305,
         computes a SHA-256 hash of the original file for server-side integrity
@@ -271,11 +271,14 @@ class SIM7600:
           file_encrypted     — "true" (tells server to decrypt the file)
           file_sha256        — SHA-256 hex digest of the ORIGINAL file (pre-encryption)
 
-        Returns (True, server_filename) on success, (False, None) on failure.
+        Returns (True, server_filename, server_alert_id) on success,
+        (False, None, None) on failure.  If server_alert_id is provided,
+        it is included in the payload so the server updates that row
+        instead of creating a new one.
         """
         if not self.has_internet():
             logger.warning("[SIM7600] No internet — upload skipped.")
-            return False, None
+            return False, None, None
 
         try:
             # Build the JSON payload
@@ -291,6 +294,8 @@ class SIM7600:
                 'location_source':     getattr(alert_object, 'location_source', None),
                 'battery_percentage':  alert_object.battery_percentage,
             }
+            if server_alert_id is not None:
+                payload_dict['alert_id'] = server_alert_id
 
             # Encrypt telemetry JSON
             from crypto_utils import chacha_encrypt_text, chacha_encrypt_bytes
@@ -316,10 +321,14 @@ class SIM7600:
                 )
                 if r.status_code == 201:
                     logger.info("[SIM7600] Telemetry uploaded (no evidence file).")
-                    return True, None
+                    try:
+                        resp_alert_id = r.json().get('alert_id')
+                    except Exception:
+                        resp_alert_id = None
+                    return True, None, resp_alert_id
                 else:
                     logger.warning("[SIM7600] Telemetry upload failed — %d.", r.status_code)
-                    return False, None
+                    return False, None, None
 
             # Read, hash, and encrypt the evidence file
             with open(file_path, 'rb') as f:
@@ -356,7 +365,7 @@ class SIM7600:
             if r.status_code == 201:
                 logger.info("[SIM7600] Uploaded %s.", os.path.basename(file_path))
                 try:
-                    # Server returns saved_files list
+                    # Server returns saved_files list and alert_id
                     response_json   = r.json()
                     saved_files     = response_json.get('saved_files', [])
                     uploaded_filename = (
@@ -364,18 +373,19 @@ class SIM7600:
                         if saved_files
                         else os.path.basename(file_path)
                     )
-                    return True, uploaded_filename
+                    resp_alert_id = response_json.get('alert_id')
+                    return True, uploaded_filename, resp_alert_id
                 except requests.exceptions.JSONDecodeError:
-                    return True, os.path.basename(file_path)
+                    return True, os.path.basename(file_path), None
             else:
                 logger.warning(
                     "[SIM7600] Upload failed — server returned %d.", r.status_code
                 )
-                return False, None
+                return False, None, None
 
         except Exception as e:
             logger.error("[SIM7600] Upload error: %s", e)
-            return False, None
+            return False, None, None
 
     # ── Connectivity check ────────────────────────────────────────────────────
     @staticmethod

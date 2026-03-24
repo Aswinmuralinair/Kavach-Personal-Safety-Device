@@ -29,7 +29,7 @@ When you run `python main.py` on the Pi, it starts 10 subsystems simultaneously:
 2. **IMU** (BNO055 via I2C) — checks for falls 10 times/second
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
-5. **Pi Camera** (CSI interface via rpicam-vid) — records 25-second MP4 evidence clips during alerts
+5. **Pi Camera** (CSI interface via rpicam-vid) — records 30-second MP4 evidence clips during alerts
 6. **Microphone Recorder** (sounddevice) — records 42-second WAV audio evidence during alerts (auto-disables if no real mic)
 7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices (auto-disables if not connected)
 8. **Config Sync** — polls server every 10s for config changes + sends battery heartbeat
@@ -53,7 +53,7 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 ### SOS Sequence
 
 ```
-Step 1 → START CAMERA + MICROPHONE RECORDING (25-sec video + 42-sec audio, staggered 3s apart)
+Step 1 → START CAMERA + MICROPHONE RECORDING (30-sec video + 42-sec audio, staggered 3s apart)
 Step 2 → UPLOAD TELEMETRY TO SERVER (immediate, so mobile app sees the alert within 5s)
 Step 3 → CALL POLICE (rings 15 seconds, hangs up)
 Step 4 → SMS to guardian: "SOS ALERT - Emergency triggered"
@@ -353,7 +353,7 @@ Kavach/
 │   │   ├── sensors.py              ← BNO055 (IMU/fall) + MAX30102 (heart rate)
 │   │   ├── audio.py                ← YAMNet microphone listener
 │   │   ├── button.py               ← GPIO button with single/double/long press
-│   │   ├── camera.py               ← Pi Camera: 25-sec MP4 clip recording (rpicam-vid)
+│   │   ├── camera.py               ← Pi Camera: 30-sec MP4 clip recording (rpicam-vid)
 │   │   ├── audio_recorder.py       ← Microphone: 42-sec WAV clip recording (disabled if no real mic)
 │   │   ├── whatsapp.py             ← CallMeBot WhatsApp API wrapper
 │   │   ├── lora.py                 ← SX1278 LoRa mesh radio (disabled if no hardware)
@@ -551,8 +551,8 @@ During SOS and MEDICAL alerts:
 | 4 | **App push notifications** | `flutter_local_notifications` polls every 5 seconds. Shows notification with sound when new SOS/MEDICAL alert arrives |
 | 5 | **App splash screen** | Animated Kavach logo with "Your Safety, Our Priority" caption on app launch |
 | 6 | **Custom launcher icon** | Kavach logo replaces default Flutter icon on Android home screen |
-| 7 | **Camera fix (rpicam-vid)** | Replaced picamera2 with `rpicam-vid` subprocess for Pi Camera recording. 25-second MP4 clips |
-| 8 | **Staggered clip durations** | Video=25s, Audio=42s — LCM=1050s (17.5 min), so clips never restart simultaneously (avoids memory spikes on Pi) |
+| 7 | **Camera fix (rpicam-vid)** | Replaced picamera2 with `rpicam-vid` subprocess for Pi Camera recording. 30-second MP4 clips |
+| 8 | **Staggered clip durations** | Video=30s, Audio=42s — LCM=210s (3.5 min), so clips never restart simultaneously (avoids memory spikes on Pi) |
 | 9 | **Config poll 10s** | Device polls server every 10 seconds (was 60s) for faster config sync and battery heartbeat |
 | 10 | **Keyboard on Pi** | Keyboard demo keys (f/h/a/s/d/l/q) now work on Pi alongside GPIO buttons for remote testing |
 | 11 | **YAMNet fix** | Fixed download URL (403 error) and audio buffer size (15600 samples, not 16000) |
@@ -575,3 +575,14 @@ During SOS and MEDICAL alerts:
 | 4 | **Evidence SMS removed** | Evidence download links are no longer sent via SMS. Evidence files are only accessible through the server dashboard and mobile app (more secure — no URLs in plain text SMS) |
 | 5 | **Immediate telemetry upload** | SOS/MEDICAL sequences upload telemetry to server immediately (before camera starts), so the mobile app sees the alert within 5 seconds. Camera starts after upload completes to avoid RAM contention |
 | 6 | **Location source tracking** | GPS vs Cell Tower source displayed everywhere: SMS messages, server dashboard, mobile app alert detail. Stored as `location_source` field in database |
+
+---
+
+## Changes (v3.7) — Alert Consolidation + App Auto-Refresh
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | **Video clip duration** | Camera now records 30-second MP4 clips (was 25s). Staggered durations: Video=30s, Audio=42s, LCM=210s (3.5 min) — clips never restart simultaneously, avoiding memory spikes on Pi |
+| 2 | **Evidence no longer sent via SMS** | Evidence files are only accessible through the Kavach app and server dashboard. No download links are sent via SMS (more secure — no URLs in plain text messages) |
+| 3 | **Alert consolidation** | One button press = one alert row in the database. Location updates, evidence file uploads, and battery readings all update the **same** alert row instead of creating new rows. Prevents duplicate alert entries per SOS event |
+| 4 | **App auto-refresh** | All mobile app screens auto-refresh every 10 seconds. Alert detail screen refreshes every 5 seconds. No manual pull-to-refresh needed — the app always shows the latest data |

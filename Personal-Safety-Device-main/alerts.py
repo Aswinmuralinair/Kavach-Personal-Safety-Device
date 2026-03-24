@@ -159,6 +159,7 @@ def _run_update_loop(
     power_monitor,
     alert_label: str,
     uploaded_files: set,      # tracks already-uploaded filenames (prevents re-upload)
+    server_alert_id=None,     # if set, subsequent uploads UPDATE this server row
 ) -> None:
     """
     Runs every 60 seconds until _stop_alert_event is set (safe button pressed).
@@ -234,9 +235,12 @@ def _run_update_loop(
 
             for file_name in new_files:
                 file_path = os.path.join(evidence_dir, file_name)
-                success, uploaded_filename = sim.upload_alert(
-                    config['server_url'], alert_row, file_path
+                success, uploaded_filename, resp_alert_id = sim.upload_alert(
+                    config['server_url'], alert_row, file_path,
+                    server_alert_id=server_alert_id,
                 )
+                if resp_alert_id and server_alert_id is None:
+                    server_alert_id = resp_alert_id  # capture on first successful upload
                 if success:
                     uploaded_files.add(file_name)   # mark as done — never re-send
                     # Evidence is accessible via server dashboard and mobile app.
@@ -297,9 +301,12 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
     # ── Step 0a: Immediate server upload FIRST (lightweight, no evidence) ──
     # Do this BEFORE starting camera — crypto encryption + HTTP is RAM-heavy
     # and rpicam-vid subprocess competes for memory on the Pi.
+    server_alert_id = None
     try:
-        sim.upload_alert(config['server_url'], alert_row, file_path=None)
-        logger.info("[SOS] Immediate telemetry upload sent to server.")
+        _ok, _fname, server_alert_id = sim.upload_alert(
+            config['server_url'], alert_row, file_path=None
+        )
+        logger.info("[SOS] Immediate telemetry upload sent to server (server_alert_id=%s).", server_alert_id)
     except Exception as exc:
         logger.warning("[SOS] Immediate upload failed: %s — continuing.", exc)
 
@@ -381,6 +388,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         power_monitor=power_monitor,
         alert_label="SOS",
         uploaded_files=set(),   # fresh set per alert session
+        server_alert_id=server_alert_id,
     )
 
     session.close()
@@ -426,9 +434,12 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
     session.commit()
 
     # ── Step 0a: Immediate server upload FIRST (lightweight, no evidence) ──
+    server_alert_id = None
     try:
-        sim.upload_alert(config['server_url'], alert_row, file_path=None)
-        logger.info("[MEDICAL] Immediate telemetry upload sent to server.")
+        _ok, _fname, server_alert_id = sim.upload_alert(
+            config['server_url'], alert_row, file_path=None
+        )
+        logger.info("[MEDICAL] Immediate telemetry upload sent to server (server_alert_id=%s).", server_alert_id)
     except Exception as exc:
         logger.warning("[MEDICAL] Immediate upload failed: %s — continuing.", exc)
 
@@ -519,6 +530,7 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
         power_monitor=power_monitor,
         alert_label="MEDICAL",
         uploaded_files=set(),
+        server_alert_id=server_alert_id,
     )
 
     session.close()

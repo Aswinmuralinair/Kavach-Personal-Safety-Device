@@ -23,6 +23,7 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
   String _deviceBattery = 'N/A';
   bool _deviceOnline = false;
   Timer? _statusTimer;
+  Timer? _refreshTimer;
   String? _deviceId;
 
   @override
@@ -30,11 +31,16 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
     super.initState();
     _loadData();
     _initDeviceStatusPolling();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _loadData(),
+    );
   }
 
   @override
   void dispose() {
     _statusTimer?.cancel();
+    _refreshTimer?.cancel();
     super.dispose();
   }
 

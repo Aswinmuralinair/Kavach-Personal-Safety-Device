@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../services/api_service.dart';
@@ -14,11 +15,22 @@ class _GuardianAlertsScreenState extends State<GuardianAlertsScreen> {
   bool _loading = true;
   String? _error;
   List<AlertModel> _alerts = [];
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _loadAlerts();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _loadAlerts(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadAlerts() async {

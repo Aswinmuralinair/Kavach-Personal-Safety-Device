@@ -1,6 +1,23 @@
+# Kavach Server v4.0 — Dependencies
+# Install: pip install -r Requirements.txt
+
+# ── Core Flask ──────────────────────────────────────────────────────────────
 Flask>=2.3
 Flask-SQLAlchemy>=3.0
 Flask-Cors>=4.0
-cryptography>=41.0
 Werkzeug>=2.3
 itsdangerous>=2.0
+
+# ── Encryption (ChaCha20-Poly1305 for device telemetry) ─────────────────────
+cryptography>=41.0
+
+# ── SocketIO — real-time GPS streaming + alert broadcast ────────────────────
+# Enables WebSocket communication between device, server, and app.
+# If not installed, server falls back to HTTP-only mode (no real-time).
+flask-socketio>=5.3
+
+# ── Firebase Cloud Messaging (FCM) — push notifications ─────────────────────
+# Optional: only needed if you set FIREBASE_CREDENTIALS env var.
+# If not installed, push notifications are silently disabled.
+# Uncomment when ready: pip install firebase-admin
+# firebase-admin>=6.0

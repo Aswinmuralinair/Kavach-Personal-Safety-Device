@@ -198,4 +198,88 @@ class ApiService {
   static String evidenceUrl(String filename) {
     return '$baseUrl/uploads/$filename';
   }
+
+  // ── Evidence Chain Ledger ────────────────────────────────────────────
+
+  /// Get all evidence files for a specific alert
+  static Future<Map<String, dynamic>> getEvidenceForAlert(int alertId) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/evidence/alert/$alertId'),
+      headers: await _authHeaders(),
+    );
+    return _handleResponse(response);
+  }
+
+  /// Verify a single evidence file's SHA-256 hash integrity
+  static Future<Map<String, dynamic>> verifyEvidence(int evidenceId) async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/evidence/$evidenceId/verify'),
+      headers: await _authHeaders(),
+    );
+    return _handleResponse(response);
+  }
+
+  /// Verify the entire evidence chain ledger integrity
+  static Future<Map<String, dynamic>> verifyLedger() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/evidence/ledger/verify'),
+      headers: await _authHeaders(),
+    );
+    return _handleResponse(response);
+  }
+
+  // ── FCM Token ──────────────────────────────────────────────────────
+
+  /// Register or update the FCM push notification token
+  static Future<Map<String, dynamic>> updateFcmToken(String fcmToken) async {
+    final response = await http.put(
+      Uri.parse('$baseUrl/api/auth/fcm-token'),
+      headers: await _authHeaders(),
+      body: jsonEncode({'fcm_token': fcmToken}),
+    );
+    return _handleResponse(response);
+  }
+
+  // ── Guardian Invite System ───────────────────────────────────────────
+
+  /// Invite a guardian by their device_id
+  static Future<Map<String, dynamic>> inviteGuardian(
+      String guardianDeviceId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/auth/guardian/invite'),
+      headers: await _authHeaders(),
+      body: jsonEncode({'guardian_device_id': guardianDeviceId}),
+    );
+    return _handleResponse(response);
+  }
+
+  /// Respond to a guardian invite (accept or reject)
+  static Future<Map<String, dynamic>> respondToInvite(
+      int linkId, bool accept) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/auth/guardian/respond'),
+      headers: await _authHeaders(),
+      body: jsonEncode({'link_id': linkId, 'accept': accept}),
+    );
+    return _handleResponse(response);
+  }
+
+  /// List all guardian links (invites) for the current user
+  static Future<Map<String, dynamic>> getGuardianLinks() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/auth/guardian/links'),
+      headers: await _authHeaders(),
+    );
+    return _handleResponse(response);
+  }
+
+  /// Revoke an active guardian link
+  static Future<Map<String, dynamic>> revokeGuardian(int linkId) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/auth/guardian/revoke'),
+      headers: await _authHeaders(),
+      body: jsonEncode({'link_id': linkId}),
+    );
+    return _handleResponse(response);
+  }
 }

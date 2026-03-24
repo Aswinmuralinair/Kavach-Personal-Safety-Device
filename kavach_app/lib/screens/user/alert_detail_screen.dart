@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -17,11 +18,22 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
   String? _error;
   Map<String, dynamic>? _alert;
   List<Map<String, dynamic>> _evidence = [];
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _loadDetail();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _loadDetail(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadDetail() async {
