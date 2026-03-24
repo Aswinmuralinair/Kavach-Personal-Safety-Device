@@ -38,6 +38,7 @@ import time
 import threading
 import logging
 import random
+import platform
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -152,6 +153,18 @@ def _load_tflite_interpreter(model_path: str):
         return tflite.Interpreter(model_path=model_path)
     except ImportError:
         pass
+    
+    machine = platform.machine().lower()
+    system = platform.system().lower()
+    if system == "linux" and ("arm" in machine or "aarch64" in machine):
+        raise ImportError(
+            "tflite_runtime is not installed, and falling back to tensorflow.lite "
+            "on Raspberry Pi/ARM is unstable here: it segfaults later during "
+            "ChaCha20 encryption when an SOS upload starts. "
+            "Install tflite-runtime on Python 3.11/3.12, or keep YAMNet disabled "
+            "for stable SOS uploads."
+        )
+
     try:
         import tensorflow as tf
         logger.info("[Audio] Using tensorflow.lite (laptop mode).")

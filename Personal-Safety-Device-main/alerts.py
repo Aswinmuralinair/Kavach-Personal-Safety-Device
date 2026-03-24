@@ -4,8 +4,8 @@ alerts.py — Project Kavach
 All three alert pipelines in one place. Each function receives the shared
 SIM7600 instance from main.py (single serial port, thread-safe).
 
-  sos_sequence()     → calls police, SMS + WhatsApp guardian, GPS loop, evidence upload
-  medical_sequence() → calls ambulance, SMS + WhatsApp "MEDICAL EMERGENCY" + GPS
+  sos_sequence()     → calls police, SMS + WhatsApp guardian, GPS loop, evidence upload to server
+  medical_sequence() → calls ambulance, SMS + WhatsApp "MEDICAL EMERGENCY" + GPS + evidence upload
   safe_sequence()    → SMS + WhatsApp "I AM SAFE", cancels any active alert loop
 
 State ownership lives in KavachStateMachine (main.py). This module only
@@ -162,7 +162,9 @@ def _run_update_loop(
 ) -> None:
     """
     Runs every 60 seconds until _stop_alert_event is set (safe button pressed).
-    Sends: GPS location SMS, battery SMS, uploads any NEW evidence files.
+    Sends: GPS location SMS, battery SMS to guardian.
+    Uploads any NEW evidence files to the server (accessible via app + dashboard).
+    Evidence links are NOT sent via SMS — only viewable on server/app.
     """
     logger.info("[%s] Update loop started.", alert_label)
 
@@ -237,11 +239,8 @@ def _run_update_loop(
                 )
                 if success:
                     uploaded_files.add(file_name)   # mark as done — never re-send
-                    file_link = config['server_public_url'] + uploaded_filename
-                    sim.send_sms(
-                        config['guardian_number'],
-                        f"[Kavach {alert_label}] Evidence: {file_link}"
-                    )
+                    # Evidence is accessible via server dashboard and mobile app.
+                    # No SMS with download links — avoids exposing URLs in plain text.
                     alert_row.uploaded_files = (
                         (alert_row.uploaded_files or "") + uploaded_filename + ","
                     )

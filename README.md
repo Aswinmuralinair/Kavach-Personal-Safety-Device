@@ -66,8 +66,7 @@ Step 6 → LOOP every 60 seconds until cancelled:
            ├── Get location (5 GPS attempts → cell tower fallback)
            ├── Send updated GPS/tower location SMS
            ├── Send battery percentage SMS
-           ├── Encrypt + upload new evidence files to server
-           └── SMS guardian the download link (queue if server unreachable)
+           └── Encrypt + upload new evidence files to server (viewable on app + dashboard)
 Step 7 → Long press button → STOP CAMERA + MIC → SMS: "I AM SAFE, alert cancelled"
          → Device returns to IDLE
 ```
@@ -563,3 +562,16 @@ During SOS and MEDICAL alerts:
 | 15 | **LoRa auto-disable** | LoRa silently disables when no SX1278 hardware is connected (no more fake packet simulation or log spam). Auto-activates when hardware is wired |
 | 16 | **Audio recorder auto-disable** | Audio recorder rejects virtual devices (PulseAudio "pulse", HDMI, monitor sinks) and silently disables. Only activates with a real USB/I2S microphone |
 | 17 | **Staggered evidence start** | Camera and audio recording start 3 seconds apart during SOS/MEDICAL to prevent memory spike segfaults on Pi |
+
+---
+
+## Changes (v3.6) — Stability + Security
+
+| # | Change | Details |
+|---|--------|---------|
+| 1 | **TFLite/ChaCha20 segfault fix** | Root cause identified: YAMNet shutdown race condition. Detached inference threads could touch freed TFLite native memory, corrupting the heap. Next ChaCha20 encryption call (via `_cffi_backend`/OpenSSL) would segfault. Fix: `shutdown()` now joins inference threads + uses `_infer_lock` before releasing the interpreter |
+| 2 | **ARM/Pi TFLite guard** | Full TensorFlow (`tensorflow`) on ARM/Pi causes segfaults during ChaCha20 encryption due to native memory conflicts with `_cffi_backend`. The code now blocks `tensorflow.lite` on ARM and requires `tflite-runtime` (Python 3.9-3.12). If unavailable, YAMNet falls back to keyboard-trigger simulation mode |
+| 3 | **Singleton ChaCha20 cipher** | `ChaCha20Poly1305` object created once at import time (before TFLite loads) in `crypto_utils.py`. Reused for all encrypt/decrypt calls. Prevents cffi initialisation conflicts with other C extensions |
+| 4 | **Evidence SMS removed** | Evidence download links are no longer sent via SMS. Evidence files are only accessible through the server dashboard and mobile app (more secure — no URLs in plain text SMS) |
+| 5 | **Immediate telemetry upload** | SOS/MEDICAL sequences upload telemetry to server immediately (before camera starts), so the mobile app sees the alert within 5 seconds. Camera starts after upload completes to avoid RAM contention |
+| 6 | **Location source tracking** | GPS vs Cell Tower source displayed everywhere: SMS messages, server dashboard, mobile app alert detail. Stored as `location_source` field in database |
