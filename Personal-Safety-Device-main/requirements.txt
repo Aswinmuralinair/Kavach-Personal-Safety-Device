@@ -7,12 +7,10 @@ cryptography>=41.0
 # Audio (YAMNet AI model)
 numpy>=1.21
 sounddevice>=0.4
-# NOTE: YAMNet audio detection requires ONE of these:
-#   Python 3.9-3.12 (RECOMMENDED on Pi):  pip install tflite-runtime
-#   Python 3.13+:  pip install tensorflow
-# WARNING: full tensorflow on ARM/Pi causes segfaults during ChaCha20
-# encryption. Use tflite-runtime on Pi for stable SOS uploads.
-# If neither is installed, YAMNet falls back to keyboard-trigger mode.
+# NOTE: tflite-runtime does NOT support Python 3.13+
+# Install ONE of these manually based on your Python version:
+#   Python 3.9-3.12:  pip install tflite-runtime
+#   Python 3.13+:     pip install tensorflow
 
 # Raspberry Pi hardware
 RPi.GPIO
@@ -29,6 +27,6 @@ adafruit-circuitpython-busdevice
 # If not installed, the code auto-falls back to FakeHeartRate (won't crash)
 
 # Camera (Pi Camera Module via CSI)
-# NOTE: Uses rpicam-vid CLI (pre-installed on Raspberry Pi OS).
-# No Python camera library needed — rpicam-vid is called as a subprocess.
-# On non-Pi systems, the code auto-falls back to FakeCameraRecorder.
+# NOTE: picamera2 is Pi-only (pre-installed on Raspberry Pi OS)
+# On non-Pi systems, the code auto-falls back to FakeCameraRecorder
+# pip install picamera2    (if not already on your Pi)

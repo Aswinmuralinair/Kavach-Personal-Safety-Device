@@ -30,7 +30,7 @@ When you run `python main.py` on the Pi, it starts 10 subsystems simultaneously:
 3. **Heart Rate** (MAX30102 via I2C) — reads BPM every 5 seconds
 4. **Microphone + AI** (YAMNet TFLite model) — listens for screaming, gunshots, explosions
 5. **Pi Camera** (CSI interface via rpicam-vid) — records 30-second MP4 evidence clips during alerts
-6. **Microphone Recorder** (sounddevice) — records 42-second WAV audio evidence during alerts (auto-disables if no real mic)
+6. **Microphone Recorder** (sounddevice) — records 42-second WAV audio evidence during alerts
 7. **LoRa Radio** (SX1278 via SPI) — receives SOS from nearby Kavach devices (auto-disables if not connected)
 8. **Config Sync** — polls server every 10s for config changes + sends battery heartbeat
 9. **Power Monitor** (INA219 via I2C) — reads battery voltage for heartbeat reporting
@@ -53,7 +53,7 @@ If any sensor hardware is not connected, the code **auto-detects** and falls bac
 ### SOS Sequence
 
 ```
-Step 1 → START CAMERA + MICROPHONE RECORDING (30-sec video + 42-sec audio, staggered 3s apart)
+Step 1 → START CAMERA + MICROPHONE RECORDING (30-sec video + 42-sec audio clips to evidence/)
 Step 2 → UPLOAD TELEMETRY TO SERVER (immediate, so mobile app sees the alert within 5s)
 Step 3 → CALL POLICE (rings 15 seconds, hangs up)
 Step 4 → SMS to guardian: "SOS ALERT - Emergency triggered"
@@ -353,8 +353,8 @@ Kavach/
 │   │   ├── sensors.py              ← BNO055 (IMU/fall) + MAX30102 (heart rate)
 │   │   ├── audio.py                ← YAMNet microphone listener
 │   │   ├── button.py               ← GPIO button with single/double/long press
-│   │   ├── camera.py               ← Pi Camera: 30-sec MP4 clip recording (rpicam-vid)
-│   │   ├── audio_recorder.py       ← Microphone: 42-sec WAV clip recording (disabled if no real mic)
+│   │   ├── camera.py               ← Pi Camera: 25-sec MP4 clip recording (rpicam-vid)
+│   │   ├── audio_recorder.py       ← Microphone: 42-sec WAV clip recording
 │   │   ├── whatsapp.py             ← CallMeBot WhatsApp API wrapper
 │   │   ├── lora.py                 ← SX1278 LoRa mesh radio (disabled if no hardware)
 │   │   └── power.py                ← INA219 battery voltage monitor
@@ -381,14 +381,13 @@ Kavach/
 │   ├── lib/
 │   │   ├── main.dart               ← Entry point, auth gate, theme
 │   │   ├── services/
-│   │   │   ├── api_service.dart     ← All API calls to server
-│   │   │   └── notification_service.dart ← Local push notification polling
+│   │   │   └── api_service.dart     ← All API calls to server
 │   │   ├── models/
 │   │   │   └── alert_model.dart     ← Alert data model
 │   │   └── screens/
 │   │       ├── login_screen.dart    ← Login + Signup (User/Guardian)
 │   │       ├── user/               ← User screens (dashboard, alerts, settings, map)
-│   │       └── guardian/            ← Guardian screens (dashboard, alerts, live location map)
+│   │       └── guardian/            ← Guardian screens (dashboard, alerts)
 │   └── pubspec.yaml                ← Flutter dependencies
 │
 └── README.md                       ← This file
@@ -432,9 +431,7 @@ During SOS/MEDICAL alerts, the microphone records 42-second `.wav` clips alongsi
 - 16 kHz mono, 16-bit PCM
 - Saved to `evidence/` folder
 - Encrypted and uploaded with other evidence files
-- Uses `sounddevice` library — **auto-disables** if no real USB/I2S microphone is detected
-- Rejects virtual devices (PulseAudio "pulse", HDMI outputs, monitor sinks)
-- Camera and audio recording start 3 seconds apart to prevent memory spikes on Pi
+- Uses `sounddevice` library — falls back to `FakeAudioRecorder` if no mic detected
 
 ### 4. Offline Upload Queue
 If the server is unreachable during an alert:
@@ -561,32 +558,17 @@ During SOS and MEDICAL alerts:
 | 13 | **start.sh for Pi** | Automated setup script: installs PortAudio, creates venv, pip install, downloads YAMNet, generates key, launches device |
 | 14 | **GPS display fix** | Coordinates rounded to 6 decimal places in app UI |
 | 15 | **LoRa auto-disable** | LoRa silently disables when no SX1278 hardware is connected (no more fake packet simulation or log spam). Auto-activates when hardware is wired |
-| 16 | **Audio recorder auto-disable** | Audio recorder rejects virtual devices (PulseAudio "pulse", HDMI, monitor sinks) and silently disables. Only activates with a real USB/I2S microphone |
-| 17 | **Staggered evidence start** | Camera and audio recording start 3 seconds apart during SOS/MEDICAL to prevent memory spike segfaults on Pi |
 
 ---
 
-## Changes (v3.6) — Stability + Security
-
-| # | Change | Details |
-|---|--------|---------|
-| 1 | **TFLite/ChaCha20 segfault fix** | Root cause identified: YAMNet shutdown race condition. Detached inference threads could touch freed TFLite native memory, corrupting the heap. Next ChaCha20 encryption call (via `_cffi_backend`/OpenSSL) would segfault. Fix: `shutdown()` now joins inference threads + uses `_infer_lock` before releasing the interpreter |
-| 2 | **ARM/Pi TFLite guard** | Full TensorFlow (`tensorflow`) on ARM/Pi causes segfaults during ChaCha20 encryption due to native memory conflicts with `_cffi_backend`. The code now blocks `tensorflow.lite` on ARM and requires `tflite-runtime` (Python 3.9-3.12). If unavailable, YAMNet falls back to keyboard-trigger simulation mode |
-| 3 | **Singleton ChaCha20 cipher** | `ChaCha20Poly1305` object created once at import time (before TFLite loads) in `crypto_utils.py`. Reused for all encrypt/decrypt calls. Prevents cffi initialisation conflicts with other C extensions |
-| 4 | **Evidence SMS removed** | Evidence download links are no longer sent via SMS. Evidence files are only accessible through the server dashboard and mobile app (more secure — no URLs in plain text SMS) |
-| 5 | **Immediate telemetry upload** | SOS/MEDICAL sequences upload telemetry to server immediately (before camera starts), so the mobile app sees the alert within 5 seconds. Camera starts after upload completes to avoid RAM contention |
-| 6 | **Location source tracking** | GPS vs Cell Tower source displayed everywhere: SMS messages, server dashboard, mobile app alert detail. Stored as `location_source` field in database |
-
----
-
-## Changes (v3.7) — Alert Consolidation + App Auto-Refresh
+## Changes (v3.7) — Alert Consolidation + Live App Updates
 
 | # | Change | Details |
 |---|--------|---------|
 | 1 | **Video clip duration** | Camera now records 30-second MP4 clips (was 25s). Staggered durations: Video=30s, Audio=42s, LCM=210s (3.5 min) — clips never restart simultaneously, avoiding memory spikes on Pi |
-| 2 | **Evidence no longer sent via SMS** | Evidence files are only accessible through the Kavach app and server dashboard. No download links are sent via SMS (more secure — no URLs in plain text messages) |
-| 3 | **Alert consolidation** | One button press = one alert row in the database. Location updates, evidence file uploads, and battery readings all update the **same** alert row instead of creating new rows. Prevents duplicate alert entries per SOS event |
-| 4 | **App live updates** | All app screens update data in-place without blanking the screen. Spinner only shown on initial load — subsequent 10-second refreshes silently update content. Alert detail refreshes every 5 seconds. Pull-to-refresh still works for manual refresh |
+| 2 | **Evidence no longer sent via SMS** | SMS now says "Evidence will be available on the Kavach app" instead of sending download links. Evidence files are only accessible through the app and server dashboard |
+| 3 | **Alert consolidation** | One button press = one alert row. Location updates, evidence uploads, and battery readings all update the same alert row instead of creating new rows |
+| 4 | **App live updates** | All app screens update data in-place without blanking the screen. Spinner only shown on initial load — subsequent refreshes silently update content so the user always sees the latest data |
 
 ---
 
@@ -594,20 +576,7 @@ During SOS and MEDICAL alerts:
 
 | # | Bug | Fix |
 |---|-----|-----|
-| 1 | **Config sync polling in tight loop** | `_config_poll_loop()` had `continue` statements that skipped `time.sleep(10)` at the bottom of the loop, flooding the server. Fix: moved sleep to the top of the loop |
-| 2 | **Alert consolidation broken** | `upload_alert()` never sent `alert_id` to the server, so each evidence upload created a new alert row (id=1,2,3,4,5) instead of updating the original. Fix: capture `alert_id` from the server's 201 response on the initial telemetry upload, store it on the alert object as `_server_alert_id`, and include it in all subsequent evidence uploads so the server updates the same row |
-| 3 | **Evidence per-file SMS removed** | Each evidence file upload sent an SMS to the guardian with the download link. This was supposed to be removed in v3.6 (evidence is only accessible via app/dashboard). Removed the per-file SMS, reducing upload cycle time |
-| 4 | **App notification skipped on first alert** | `NotificationService` used `lastSeenId == 0` to skip notifications, which prevented the very first SOS alert from triggering a phone notification. Fix: replaced with a `_baselineSet` flag that only skips pre-existing alerts on the first poll after `startPolling()`, then notifies normally for all subsequent new alerts |
-
----
-
-## Changes (v3.9) — Guardian Location Tab + Device Status
-
-| # | Change | Details |
-|---|--------|---------|
-| 1 | **Guardian Location tab** | New dedicated full-screen map page for guardians. Shows all alert locations as markers (latest = large red pin, older = smaller blue pins). Auto-refreshes every 10 seconds. Bottom card shows latest coordinates, source (GPS/Cell Tower), and alert info. Re-center button to snap back to latest position |
-| 2 | **Guardian 3-tab navigation** | Guardian app now has 3 bottom tabs: Home, Alerts, Location (was 2 tabs). Removed unused Invites tab |
-| 3 | **Guardian device status card** | Guardian Home page now shows live Device Online/Offline card with battery percentage (polls every 10 seconds), matching the User dashboard |
-| 4 | **Live map auto-pan** | Guardian dashboard map automatically pans to new GPS coordinates when location updates arrive (uses `MapController.move()` instead of static `initialCenter`) |
-| 5 | **Skip tiny evidence files** | Device skips uploading evidence files smaller than 1KB (e.g. 48-byte partial video clips produced when camera is terminated by SAFE button press). Logged as warning, marked as done so they're not retried |
-| 6 | **Notification baseline fix** | Fixed bug where app notifications were skipped when no alerts existed at startup. `_baselineSet` is now set to `true` even on empty alert lists, so the first real SOS triggers a phone notification |
+| 1 | **Config sync polling in tight loop** | `_config_poll_loop()` had `continue` statements that skipped `time.sleep(10)`, flooding the server. Fix: moved sleep to the top of the loop |
+| 2 | **Alert consolidation broken** | `upload_alert()` never sent `alert_id` to the server, so each evidence upload created a new alert row instead of updating the original. Fix: capture `alert_id` from server response and include it in subsequent uploads |
+| 3 | **Evidence per-file SMS removed** | Each evidence upload sent an SMS with download link (was supposed to be removed in v3.6). Removed to reduce upload cycle time |
+| 4 | **App notification skipped on first alert** | `NotificationService` used `lastSeenId == 0` guard which prevented the first SOS from triggering a phone notification. Fix: replaced with `_baselineSet` flag |

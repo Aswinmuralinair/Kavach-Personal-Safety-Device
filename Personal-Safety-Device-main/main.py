@@ -39,6 +39,7 @@ EVIDENCE CAPTURE (started/stopped per alert, daemon threads):
 
 BACKGROUND SERVICES (daemon threads):
   ConfigSync           — polls server every 10s for config changes + sends battery heartbeat
+                         (sleep is at the TOP of the loop so `continue` never skips it)
   KeyboardDemo         — listens for f/h/a/s/d/l/q demo keys (works on Pi and desktop)
 
 FIX applied (serial port conflict):
@@ -55,13 +56,6 @@ import json
 import os
 
 from enum import Enum, auto
-
-# CRITICAL: import crypto_utils FIRST (before TFLite/audio).
-# The ChaCha20 cipher is created at import time, before XNNPACK + h5py
-# C extensions are loaded.  Creating it later causes a segfault on ARM
-# due to _cffi_backend / OpenSSL memory conflicts.
-import crypto_utils  # noqa: F401 — singleton cipher created at import
-
 from database import Base
 from hardware.button         import ButtonHandler
 from hardware.sensors        import SensorManager
@@ -282,6 +276,7 @@ def validate_config(config: dict) -> None:
     placeholders = {
         'guardian_number':   '+91XXXXXXXXXX',
         'medical_number':    '+91YYYYYYYYYY',
+        'whatsapp_number':   '+91XXXXXXXXXX',
         'whatsapp_apikey':   'YOUR_CALLMEBOT_APIKEY',
     }
     for key, placeholder in placeholders.items():
@@ -339,6 +334,7 @@ def _config_poll_loop(config: dict, power_monitor=None) -> None:
     syncable_keys = {'police_number', 'guardian_number', 'medical_number', 'whatsapp_number'}
 
     while True:
+        time.sleep(CONFIG_POLL_INTERVAL)
         try:
             import requests
             battery_str = _read_battery(power_monitor)
@@ -385,8 +381,6 @@ def _config_poll_loop(config: dict, power_monitor=None) -> None:
 
         except Exception as exc:
             logger.debug("[ConfigSync] Poll failed (server may be offline): %s", exc)
-
-        time.sleep(CONFIG_POLL_INTERVAL)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

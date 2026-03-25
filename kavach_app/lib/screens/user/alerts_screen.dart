@@ -34,21 +34,22 @@ class _UserAlertsScreenState extends State<UserAlertsScreen> {
   }
 
   Future<void> _loadAlerts() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // Only show full-screen spinner on initial load — no blank screen on refresh
+    if (_loading) {
+      setState(() => _error = null);
+    }
     try {
       final result = await ApiService.getUserAlerts();
       if (result['status'] == 'ok') {
         _alerts = (result['alerts'] as List)
             .map((a) => AlertModel.fromJson(a))
             .toList();
+        _error = null;
       } else {
-        _error = result['message'] ?? 'Failed to load alerts';
+        if (_alerts.isEmpty) _error = result['message'] ?? 'Failed to load alerts';
       }
     } catch (e) {
-      _error = 'Cannot connect to server';
+      if (_alerts.isEmpty) _error = 'Cannot connect to server';
     }
     if (mounted) setState(() => _loading = false);
   }

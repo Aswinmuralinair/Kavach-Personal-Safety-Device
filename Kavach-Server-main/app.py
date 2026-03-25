@@ -1062,17 +1062,36 @@ def receive_alert():
             data={'alert_id': str(alert_obj.id), 'type': alert_type},
         )
 
+        # Also notify linked guardians (they have a different device_id)
+        try:
+            linked_guardians = GuardianLink.query.filter_by(
+                user_device_id=device_id, status='active'
+            ).all()
+            for link in linked_guardians:
+                notify_device_alerts(
+                    link.guardian_device_id,
+                    title=f'{alert_type} Alert — Kavach',
+                    body=f'Alert from device {device_id}. Check the app for details.',
+                    data={'alert_id': str(alert_obj.id), 'type': alert_type},
+                )
+        except Exception:
+            pass  # don't fail the upload for guardian notification errors
+
         # ── 11. SocketIO broadcast to subscribed app clients ────────────────
         if _SOCKETIO_AVAILABLE:
             try:
-                socketio.emit('alert', {
+                alert_payload = {
                     'alert_id': alert_obj.id,
                     'device_id': device_id,
                     'alert_type': alert_type,
                     'gps_location': location_data,
                     'battery': data.get('battery_percentage'),
                     'timestamp': datetime.datetime.now(_UTC).isoformat(),
-                }, room=f'device_{device_id}')
+                }
+                # Broadcast to device room (user app) and linked guardian rooms
+                socketio.emit('alert', alert_payload, room=f'device_{device_id}')
+                for link in linked_guardians:
+                    socketio.emit('alert', alert_payload, room=f'device_{link.guardian_device_id}')
             except Exception:
                 pass  # don't fail the upload for SocketIO errors
 

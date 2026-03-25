@@ -7,7 +7,7 @@ Flutter mobile app for the Kavach Personal Safety Device. Connects to the Kavach
 | Role | What they see |
 |------|--------------|
 | **User** | Dashboard (live device battery + online/offline, alert counts), alert list with detail view + map, location history, settings (change phone numbers remotely) |
-| **Guardian** | Dashboard, alert list with evidence viewer (video/audio/images with integrity verification) |
+| **Guardian** | Dashboard (live device battery + online/offline, latest alert map), alert list with evidence viewer (video/audio/images with integrity verification), location history |
 
 ## Features
 
@@ -17,7 +17,8 @@ Flutter mobile app for the Kavach Personal Safety Device. Connects to the Kavach
 - **Live device status** — Dashboard polls device battery every 10 seconds, shows "Device Online" or "Device Offline"
 - **Alert detail** — GPS location on map (coordinates rounded to 6 decimal places), call/SMS status, battery, evidence files with SHA-256 integrity badges
 - **Evidence viewer** — Opens evidence files via signed download URLs (1-hour expiry, no auth headers needed in browser)
-- **Location history** — Map view of all GPS coordinates from alert updates
+- **Location history** — Map view of all GPS coordinates from alert updates (both user and guardian have dedicated location pages with map + list view)
+- **Guardian invite system** — Users can invite guardians, guardians accept/reject invites, either party can revoke
 - **Remote config** — Change police, guardian, medical, and WhatsApp numbers from the app (syncs to Pi via server)
 - **Secure auth** — Bearer token auth (24-hour expiry), auto-logout on token expiry
 

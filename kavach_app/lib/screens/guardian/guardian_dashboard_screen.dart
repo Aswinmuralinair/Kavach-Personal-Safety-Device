@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/api_service.dart';
 import '../../models/alert_model.dart';
 
@@ -19,11 +20,17 @@ class _GuardianDashboardScreenState extends State<GuardianDashboardScreen> {
   List<AlertModel> _alerts = [];
   AlertModel? _latestAlert;
   Timer? _refreshTimer;
+  Timer? _statusTimer;
+  String? _deviceId;
+  String _deviceBattery = 'N/A';
+  bool _deviceOnline = false;
+  final MapController _mapController = MapController();
 
   @override
   void initState() {
     super.initState();
     _loadData();
+    _initDeviceStatusPolling();
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 10),
       (_) => _loadData(),
@@ -33,14 +40,45 @@ class _GuardianDashboardScreenState extends State<GuardianDashboardScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
+    _statusTimer?.cancel();
     super.dispose();
   }
 
+  Future<void> _initDeviceStatusPolling() async {
+    final prefs = await SharedPreferences.getInstance();
+    _deviceId = prefs.getString('device_id') ?? 'KAVACH-001';
+    _fetchDeviceStatus();
+    _statusTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _fetchDeviceStatus(),
+    );
+  }
+
+  Future<void> _fetchDeviceStatus() async {
+    if (_deviceId == null) return;
+    try {
+      final result = await ApiService.getDeviceStatus(_deviceId!);
+      if (result['status'] == 'ok' && mounted) {
+        setState(() {
+          _deviceOnline = result['online'] == true;
+          _deviceBattery = result['battery'] ?? 'N/A';
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _deviceOnline = false;
+          _deviceBattery = 'N/A';
+        });
+      }
+    }
+  }
+
   Future<void> _loadData() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // Only show full-screen spinner on initial load — update live after that
+    if (_loading) {
+      setState(() => _error = null);
+    }
     try {
       final result = await ApiService.getGuardianAlerts();
       if (result['status'] == 'ok') {
@@ -49,12 +87,24 @@ class _GuardianDashboardScreenState extends State<GuardianDashboardScreen> {
             .toList();
         if (_alerts.isNotEmpty) {
           _latestAlert = _alerts.first;
+          // Move map to new location if available
+          if (_latestAlert!.latitude != null && _latestAlert!.longitude != null) {
+            try {
+              _mapController.move(
+                LatLng(_latestAlert!.latitude!, _latestAlert!.longitude!),
+                _mapController.camera.zoom,
+              );
+            } catch (_) {
+              // MapController not yet attached — ignore
+            }
+          }
         }
+        _error = null;
       } else {
-        _error = result['message'] ?? 'Failed to load';
+        if (_alerts.isEmpty) _error = result['message'] ?? 'Failed to load';
       }
     } catch (e) {
-      _error = 'Cannot connect to server';
+      if (_alerts.isEmpty) _error = 'Cannot connect to server';
     }
     if (mounted) setState(() => _loading = false);
   }
@@ -83,10 +133,63 @@ class _GuardianDashboardScreenState extends State<GuardianDashboardScreen> {
     }
 
     return RefreshIndicator(
-      onRefresh: _loadData,
+      onRefresh: () async {
+        await _loadData();
+        await _fetchDeviceStatus();
+      },
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Device status card — live battery + online/offline
+          Card(
+            color: _deviceOnline
+                ? Colors.green.shade50
+                : Colors.red.shade50,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _deviceOnline ? Colors.green : Colors.red,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _deviceOnline ? 'Device Online' : 'Device Offline',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          _deviceOnline
+                              ? 'Battery: $_deviceBattery'
+                              : 'No heartbeat received',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    _deviceOnline
+                        ? Icons.battery_full
+                        : Icons.battery_unknown,
+                    color: _deviceOnline ? Colors.green : Colors.red,
+                    size: 32,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
           // Status banner
           if (_latestAlert != null) ...[
             Container(
@@ -151,6 +254,7 @@ class _GuardianDashboardScreenState extends State<GuardianDashboardScreen> {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(12),
                         child: FlutterMap(
+                          mapController: _mapController,
                           options: MapOptions(
                             initialCenter: LatLng(
                               _latestAlert!.latitude!,

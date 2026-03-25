@@ -3,6 +3,12 @@ uploads/
 keys/
 __pycache__/
 *.pyc
+*.pyo
 .env
 venv/
+.venv/
 .secret_key
+app_users.json
+device_configs/
+evidence_ledger.json
+instance/

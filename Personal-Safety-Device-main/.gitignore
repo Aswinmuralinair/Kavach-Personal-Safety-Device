@@ -4,13 +4,21 @@
 # Config with secrets
 #config.json
 
+# Encryption keys
+keys/
+
 # Runtime evidence / uploads
+evidence/
 evidence_files/
 uploads/
+
+# AI model files (downloaded by setup_audio.py)
+models/
 
 # Python cache
 __pycache__/
 *.pyc
+*.pyo
 
 # Virtual environments
 venv/

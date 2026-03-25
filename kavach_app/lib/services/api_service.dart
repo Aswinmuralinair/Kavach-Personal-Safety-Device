@@ -141,6 +141,15 @@ class ApiService {
     return _handleResponse(response);
   }
 
+  /// Get location history for guardian's monitored user
+  static Future<Map<String, dynamic>> getGuardianLocations() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/guardian/locations'),
+      headers: await _authHeaders(),
+    );
+    return _handleResponse(response);
+  }
+
   // ── Evidence ──────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getGuardianEvidence(

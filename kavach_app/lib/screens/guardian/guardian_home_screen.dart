@@ -3,7 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../login_screen.dart';
 import 'guardian_alerts_screen.dart';
 import 'guardian_dashboard_screen.dart';
-import 'guardian_invites_screen.dart';
+import 'guardian_location_screen.dart';
 
 class GuardianHomeScreen extends StatefulWidget {
   const GuardianHomeScreen({super.key});
@@ -18,7 +18,7 @@ class _GuardianHomeScreenState extends State<GuardianHomeScreen> {
   final _screens = const [
     GuardianDashboardScreen(),
     GuardianAlertsScreen(),
-    GuardianInvitesScreen(),
+    GuardianLocationScreen(),
   ];
 
   Future<void> _logout() async {
@@ -80,9 +80,9 @@ class _GuardianHomeScreenState extends State<GuardianHomeScreen> {
             label: 'Alerts',
           ),
           NavigationDestination(
-            icon: Icon(Icons.mail_outlined),
-            selectedIcon: Icon(Icons.mail),
-            label: 'Invites',
+            icon: Icon(Icons.map_outlined),
+            selectedIcon: Icon(Icons.map),
+            label: 'Location',
           ),
         ],
       ),

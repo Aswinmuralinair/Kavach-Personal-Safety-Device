@@ -78,10 +78,10 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
   }
 
   Future<void> _loadData() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // Only show full-screen spinner on initial load
+    if (_loading) {
+      setState(() => _error = null);
+    }
     try {
       final results = await Future.wait([
         ApiService.getUserAlerts(),
@@ -100,8 +100,10 @@ class _UserDashboardScreenState extends State<UserDashboardScreen> {
       }
 
       _health = healthData;
+      _error = null;
     } catch (e) {
-      _error = 'Failed to connect to server';
+      // Only show error if we have no data yet (initial load)
+      if (_allAlerts.isEmpty) _error = 'Failed to connect to server';
     }
     if (mounted) setState(() => _loading = false);
   }

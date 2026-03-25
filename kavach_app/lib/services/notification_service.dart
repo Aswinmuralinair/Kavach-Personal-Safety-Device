@@ -8,6 +8,7 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   static Timer? _pollTimer;
   static bool _initialized = false;
+  static bool _baselineSet = false;
 
   static Future<void> init() async {
     if (_initialized) return;
@@ -30,7 +31,8 @@ class NotificationService {
   /// Start polling for new alerts. Call after login.
   static void startPolling({required String role}) {
     stopPolling();
-    // Poll immediately, then every 15 seconds
+    _baselineSet = false;
+    // Poll immediately to set baseline, then every 5 seconds
     _checkForNewAlerts(role);
     _pollTimer = Timer.periodic(
       const Duration(seconds: 5),
@@ -51,7 +53,11 @@ class NotificationService {
 
       if (result['status'] != 'ok') return;
       final alerts = result['alerts'] as List?;
-      if (alerts == null || alerts.isEmpty) return;
+      if (alerts == null || alerts.isEmpty) {
+        // Mark baseline even when empty — so first real alert triggers notification
+        if (!_baselineSet) _baselineSet = true;
+        return;
+      }
 
       final latest = alerts.first;
       final latestId = latest['id'] as int? ?? 0;
@@ -59,12 +65,19 @@ class NotificationService {
       final prefs = await SharedPreferences.getInstance();
       final lastSeenId = prefs.getInt('last_seen_alert_id') ?? 0;
 
+      // First poll after startPolling(): record the current max alert id
+      // as baseline so we don't notify about pre-existing alerts.
+      if (!_baselineSet) {
+        _baselineSet = true;
+        if (latestId > lastSeenId) {
+          await prefs.setInt('last_seen_alert_id', latestId);
+        }
+        return;
+      }
+
       if (latestId > lastSeenId) {
         // New alert(s) detected
         await prefs.setInt('last_seen_alert_id', latestId);
-
-        // Don't notify on first load (no previous baseline)
-        if (lastSeenId == 0) return;
 
         final alertType = latest['alert_type'] ?? 'ALERT';
         final trigger = latest['trigger_source'] ?? '';
@@ -81,17 +94,20 @@ class NotificationService {
           'audio_detection': 'Danger Sound',
           'lora_relay': 'LoRa Mesh Relay',
         };
-        // Match partial keys (e.g. audio_screaming → Danger Sound)
+        // Match trigger source to a friendly label.
+        // Check audio_ prefix first (covers all audio variants like
+        // audio_screaming, audio_gunshot, etc.) before exact/partial matching.
         String friendlyTrigger = trigger;
-        for (final entry in triggerLabels.entries) {
-          if (trigger.toLowerCase().contains(entry.key.toLowerCase()) ||
-              entry.key.toLowerCase().contains(trigger.toLowerCase())) {
-            friendlyTrigger = entry.value;
-            break;
-          }
-        }
         if (trigger.startsWith('audio_')) {
           friendlyTrigger = 'Danger Sound';
+        } else {
+          for (final entry in triggerLabels.entries) {
+            if (trigger.toLowerCase().contains(entry.key.toLowerCase()) ||
+                entry.key.toLowerCase().contains(trigger.toLowerCase())) {
+              friendlyTrigger = entry.value;
+              break;
+            }
+          }
         }
 
         String body = 'Device: $deviceId';

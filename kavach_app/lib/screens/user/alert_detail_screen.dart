@@ -37,21 +37,22 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
   }
 
   Future<void> _loadDetail() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // Only show full-screen spinner on initial load — update live after that
+    if (_loading) {
+      setState(() => _error = null);
+    }
     try {
       final result = await ApiService.getAlertDetail(widget.alertId);
       if (result['status'] == 'ok') {
         _alert = result['alert'];
         _evidence = List<Map<String, dynamic>>.from(
             result['alert']['evidence'] ?? []);
+        _error = null;
       } else {
-        _error = result['message'] ?? 'Failed to load';
+        if (_alert == null) _error = result['message'] ?? 'Failed to load';
       }
     } catch (e) {
-      _error = 'Cannot connect to server';
+      if (_alert == null) _error = 'Cannot connect to server';
     }
     if (mounted) setState(() => _loading = false);
   }

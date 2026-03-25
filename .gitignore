@@ -2,13 +2,21 @@
 Kavach-Server-main/.secret_key
 Kavach-Server-main/app_users.json
 Kavach-Server-main/device_configs/
+Personal-Safety-Device-main/keys/
+Kavach-Server-main/keys/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
 venv/
+.venv/
 *.db
+
+# Evidence / uploads (runtime data)
+Personal-Safety-Device-main/evidence/
+Kavach-Server-main/uploads/
+Kavach-Server-main/evidence_ledger.json
 
 # Flutter build outputs
 kavach_app/build/
@@ -20,6 +28,10 @@ kavach_app/.flutter-plugins-dependencies
 .idea/
 .vscode/
 *.iml
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Claude
 .claude/

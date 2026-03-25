@@ -17,7 +17,6 @@ dependencies:
   url_launcher: ^6.2.0
   google_fonts: ^6.1.0
   flutter_local_notifications: ^18.0.1
-  socket_io_client: ^2.0.3+1          # SocketIO real-time communication
 
 dev_dependencies:
   flutter_test:

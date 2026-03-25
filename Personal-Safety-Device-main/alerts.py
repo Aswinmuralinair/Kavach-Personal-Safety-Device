@@ -4,8 +4,8 @@ alerts.py — Project Kavach
 All three alert pipelines in one place. Each function receives the shared
 SIM7600 instance from main.py (single serial port, thread-safe).
 
-  sos_sequence()     → calls police, SMS + WhatsApp guardian, GPS loop, evidence upload to server
-  medical_sequence() → calls ambulance, SMS + WhatsApp "MEDICAL EMERGENCY" + GPS + evidence upload
+  sos_sequence()     → calls police, SMS + WhatsApp guardian, GPS loop, evidence upload
+  medical_sequence() → calls ambulance, SMS + WhatsApp "MEDICAL EMERGENCY" + GPS
   safe_sequence()    → SMS + WhatsApp "I AM SAFE", cancels any active alert loop
 
 State ownership lives in KavachStateMachine (main.py). This module only
@@ -159,13 +159,10 @@ def _run_update_loop(
     power_monitor,
     alert_label: str,
     uploaded_files: set,      # tracks already-uploaded filenames (prevents re-upload)
-    server_alert_id=None,     # if set, subsequent uploads UPDATE this server row
 ) -> None:
     """
     Runs every 60 seconds until _stop_alert_event is set (safe button pressed).
-    Sends: GPS location SMS, battery SMS to guardian.
-    Uploads any NEW evidence files to the server (accessible via app + dashboard).
-    Evidence links are NOT sent via SMS — only viewable on server/app.
+    Sends: GPS location SMS, battery SMS, uploads any NEW evidence files.
     """
     logger.info("[%s] Update loop started.", alert_label)
 
@@ -235,16 +232,19 @@ def _run_update_loop(
 
             for file_name in new_files:
                 file_path = os.path.join(evidence_dir, file_name)
-                success, uploaded_filename, resp_alert_id = sim.upload_alert(
-                    config['server_url'], alert_row, file_path,
-                    server_alert_id=server_alert_id,
+                # Skip tiny/corrupt files (e.g. partial clips from camera SIGTERM)
+                if os.path.getsize(file_path) < 1024:
+                    logger.warning("[%s] Skipping tiny file (%d bytes): %s",
+                                   alert_label, os.path.getsize(file_path), file_name)
+                    uploaded_files.add(file_name)  # mark so we don't retry
+                    continue
+                success, uploaded_filename, srv_id = sim.upload_alert(
+                    config['server_url'], alert_row, file_path
                 )
-                if resp_alert_id and server_alert_id is None:
-                    server_alert_id = resp_alert_id  # capture on first successful upload
                 if success:
                     uploaded_files.add(file_name)   # mark as done — never re-send
-                    # Evidence is accessible via server dashboard and mobile app.
-                    # No SMS with download links — avoids exposing URLs in plain text.
+                    if srv_id is not None:
+                        alert_row._server_alert_id = srv_id
                     alert_row.uploaded_files = (
                         (alert_row.uploaded_files or "") + uploaded_filename + ","
                     )
@@ -301,12 +301,14 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
     # ── Step 0a: Immediate server upload FIRST (lightweight, no evidence) ──
     # Do this BEFORE starting camera — crypto encryption + HTTP is RAM-heavy
     # and rpicam-vid subprocess competes for memory on the Pi.
-    server_alert_id = None
+    # Capture server_alert_id so evidence uploads consolidate into same row.
     try:
-        _ok, _fname, server_alert_id = sim.upload_alert(
-            config['server_url'], alert_row, file_path=None
-        )
-        logger.info("[SOS] Immediate telemetry upload sent to server (server_alert_id=%s).", server_alert_id)
+        _ok, _, srv_id = sim.upload_alert(config['server_url'], alert_row, file_path=None)
+        if srv_id is not None:
+            alert_row._server_alert_id = srv_id
+            logger.info("[SOS] Immediate telemetry upload sent (server alert_id=%s).", srv_id)
+        else:
+            logger.info("[SOS] Immediate telemetry upload sent to server.")
     except Exception as exc:
         logger.warning("[SOS] Immediate upload failed: %s — continuing.", exc)
 
@@ -341,7 +343,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         logger.info("[SOS] Step 2 — Sending SOS SMS to guardian.")
         sent = sim.send_sms(
             config['guardian_number'],
-            "SOS ALERT - Emergency triggered on Kavach device. Location SMS to follow."
+            "SOS ALERT - Emergency triggered on Kavach device. Location SMS to follow. Evidence will be available on the Kavach app."
         )
         alert_row.guardian_sms_status = sent
         session.commit()
@@ -388,7 +390,6 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
         power_monitor=power_monitor,
         alert_label="SOS",
         uploaded_files=set(),   # fresh set per alert session
-        server_alert_id=server_alert_id,
     )
 
     session.close()
@@ -434,12 +435,13 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
     session.commit()
 
     # ── Step 0a: Immediate server upload FIRST (lightweight, no evidence) ──
-    server_alert_id = None
     try:
-        _ok, _fname, server_alert_id = sim.upload_alert(
-            config['server_url'], alert_row, file_path=None
-        )
-        logger.info("[MEDICAL] Immediate telemetry upload sent to server (server_alert_id=%s).", server_alert_id)
+        _ok, _, srv_id = sim.upload_alert(config['server_url'], alert_row, file_path=None)
+        if srv_id is not None:
+            alert_row._server_alert_id = srv_id
+            logger.info("[MEDICAL] Immediate telemetry upload sent (server alert_id=%s).", srv_id)
+        else:
+            logger.info("[MEDICAL] Immediate telemetry upload sent to server.")
     except Exception as exc:
         logger.warning("[MEDICAL] Immediate upload failed: %s — continuing.", exc)
 
@@ -491,7 +493,7 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
             f"Kavach device has detected a medical emergency.\n"
             f"Location: {maps_link}\n"
             f"Time: {_ist_timestamp()}\n"
-            f"Ambulance has been called. Please respond immediately."
+            f"Ambulance has been called. Evidence will be available on the Kavach app. Please respond immediately."
         )
         sent = sim.send_sms(config['guardian_number'], guardian_msg)
         alert_row.guardian_sms_status = sent
@@ -530,7 +532,6 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
         power_monitor=power_monitor,
         alert_label="MEDICAL",
         uploaded_files=set(),
-        server_alert_id=server_alert_id,
     )
 
     session.close()
