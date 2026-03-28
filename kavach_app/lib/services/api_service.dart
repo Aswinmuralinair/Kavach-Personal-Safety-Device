@@ -161,7 +161,7 @@ class ApiService {
     return _handleResponse(response);
   }
 
-  // ── Config (User only) ────────────────────────────────────────────────
+  // ── Config ─────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getConfig() async {
     final response = await http.get(
@@ -249,46 +249,4 @@ class ApiService {
     return _handleResponse(response);
   }
 
-  // ── Guardian Invite System ───────────────────────────────────────────
-
-  /// Invite a guardian by their device_id
-  static Future<Map<String, dynamic>> inviteGuardian(
-      String guardianDeviceId) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/api/auth/guardian/invite'),
-      headers: await _authHeaders(),
-      body: jsonEncode({'guardian_device_id': guardianDeviceId}),
-    );
-    return _handleResponse(response);
-  }
-
-  /// Respond to a guardian invite (accept or reject)
-  static Future<Map<String, dynamic>> respondToInvite(
-      int linkId, bool accept) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/api/auth/guardian/respond'),
-      headers: await _authHeaders(),
-      body: jsonEncode({'link_id': linkId, 'accept': accept}),
-    );
-    return _handleResponse(response);
-  }
-
-  /// List all guardian links (invites) for the current user
-  static Future<Map<String, dynamic>> getGuardianLinks() async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/auth/guardian/links'),
-      headers: await _authHeaders(),
-    );
-    return _handleResponse(response);
-  }
-
-  /// Revoke an active guardian link
-  static Future<Map<String, dynamic>> revokeGuardian(int linkId) async {
-    final response = await http.post(
-      Uri.parse('$baseUrl/api/auth/guardian/revoke'),
-      headers: await _authHeaders(),
-      body: jsonEncode({'link_id': linkId}),
-    );
-    return _handleResponse(response);
-  }
 }

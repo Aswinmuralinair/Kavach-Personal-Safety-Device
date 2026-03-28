@@ -1,9 +1,9 @@
 """
-app.py — Kavach Server v4.0
+app.py — Kavach Server v4.1
 
 Flask API with admin dashboard, mobile app auth, device telemetry,
-real-time SocketIO communication, evidence chain ledger, and FCM
-push notifications. All data routes are authenticated.
+evidence chain ledger, and FCM push notifications.
+All data routes are authenticated.
 
 Core endpoints:
   GET  /                          — admin dashboard (session login)
@@ -31,11 +31,6 @@ Evidence Chain Ledger (Blueprint):
   GET  /api/evidence/alert/<id>   — list evidence for an alert
   GET  /api/evidence/<id>/verify  — verify individual evidence hash
   GET  /api/evidence/ledger/verify— verify entire ledger integrity
-
-SocketIO events:
-  join_device  — app subscribes to device room for real-time updates
-  gps_update   — device emits GPS coordinates (broadcast to room)
-  alert_event  — real-time alert broadcast to subscribers
 """
 
 from flask import Flask, request, jsonify, send_from_directory, render_template, session, redirect, url_for
@@ -53,7 +48,7 @@ import webbrowser
 import threading
 import subprocess
 
-from database import DB, Alert, Evidence, GuardianLink
+from database import DB, Alert, Evidence
 from utils import save_file_safe, compute_sha256, decrypt_file_in_place
 from crypto_utils import chacha_decrypt_text
 from evidence import file_type_from_ext, append_to_ledger
@@ -82,17 +77,6 @@ app.config['MAX_CONTENT_LENGTH']             = 64 * 1024 * 1024   # 64 MB max up
 
 DB.init_app(app)
 
-# ── SocketIO — real-time communication (GPS streaming, live alerts) ────────
-try:
-    from flask_socketio import SocketIO, emit, join_room
-    socketio = SocketIO(app, cors_allowed_origins='*', async_mode='threading')
-    _SOCKETIO_AVAILABLE = True
-    logger.info("[SocketIO] Initialized — real-time communication enabled.")
-except ImportError:
-    socketio = None
-    _SOCKETIO_AVAILABLE = False
-    logger.warning("[SocketIO] flask-socketio not installed — running without real-time features.")
-
 # ── Register Blueprints ───────────────────────────────────────────────────
 from blueprints.evidence_bp import evidence_bp
 app.register_blueprint(evidence_bp)
@@ -115,7 +99,7 @@ def _update_device_status(device_id: str, battery: str):
     """Record the latest heartbeat from a device."""
     _device_status[device_id] = {
         'battery':   battery,
-        'last_seen': datetime.datetime.now(_UTC),
+        'last_seen': datetime.datetime.now(_IST),
     }
 
 
@@ -124,7 +108,7 @@ def _get_device_status(device_id: str) -> dict:
     info = _device_status.get(device_id)
     if not info:
         return {'battery': None, 'online': False, 'last_seen': None}
-    elapsed = (datetime.datetime.now(_UTC) - info['last_seen']).total_seconds()
+    elapsed = (datetime.datetime.now(_IST) - info['last_seen']).total_seconds()
     return {
         'battery':   info['battery'],
         'online':    elapsed <= _DEVICE_ONLINE_TIMEOUT,
@@ -174,12 +158,12 @@ app.config['SECRET_KEY'] = _load_or_create_secret_key()
 _token_serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 # ─────────────────────────────────────────────────────────────────────────────
-# UTC alias — datetime.timezone.utc works on Python 3.2+
+# IST alias — all timestamps stored and returned in Indian Standard Time
 # ─────────────────────────────────────────────────────────────────────────────
-_UTC = datetime.timezone.utc
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30), name='IST')
 
 # Boot time - used in /api/health uptime calculation
-_SERVER_START_TIME = datetime.datetime.now(_UTC)
+_SERVER_START_TIME = datetime.datetime.now(_IST)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -391,7 +375,7 @@ def auth_signup():
             'device_id':    device_id,
             'role':         role,
             'password_hash': _hash_password(password),
-            'created_at':   datetime.datetime.now(_UTC).isoformat(),
+            'created_at':   datetime.datetime.now(_IST).isoformat(),
         }
         _save_app_users(users)
         logger.info("[Auth] New %s account registered for device %s", role, device_id)
@@ -468,182 +452,6 @@ def update_fcm_token():
 
         store_fcm_token(device_id, role, body['fcm_token'])
         return jsonify({'status': 'ok', 'message': 'FCM token registered'}), 200
-    except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 401
-    except Exception as exc:
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Guardian Invite System
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.route('/api/auth/guardian/invite', methods=['POST'])
-def invite_guardian():
-    """
-    User invites a guardian by specifying the guardian's device_id.
-    Creates a GuardianLink with status='pending'.
-    The guardian must have a guardian account for that device_id.
-    Accepts: { "guardian_device_id": "KAVACH-001" }
-    """
-    try:
-        device_id, role = _verify_token(request)
-        if role != 'user':
-            return jsonify({'status': 'error', 'message': 'Only user accounts can invite guardians'}), 403
-
-        body = request.get_json()
-        if not body or not body.get('guardian_device_id'):
-            return jsonify({'status': 'error', 'message': 'guardian_device_id is required'}), 400
-
-        guardian_device_id = body['guardian_device_id'].strip()
-
-        # Check the guardian account exists
-        users = _load_app_users()
-        guardian_key = f"{guardian_device_id}_guardian"
-        if guardian_key not in users:
-            return jsonify({
-                'status': 'error',
-                'message': f'No guardian account found for device {guardian_device_id}. '
-                           f'The guardian must sign up first.',
-            }), 404
-
-        # Check for duplicate invite
-        existing = GuardianLink.query.filter_by(
-            user_device_id=device_id,
-            guardian_device_id=guardian_device_id,
-        ).filter(GuardianLink.status.in_(['pending', 'active'])).first()
-
-        if existing:
-            return jsonify({
-                'status': 'error',
-                'message': f'An invite already exists (status: {existing.status})',
-            }), 409
-
-        link = GuardianLink(
-            user_device_id=device_id,
-            guardian_device_id=guardian_device_id,
-            status='pending',
-        )
-        DB.session.add(link)
-        DB.session.commit()
-
-        # Notify the guardian via FCM
-        notify_device_alerts(
-            guardian_device_id,
-            title='Guardian Invite',
-            body=f'Device {device_id} has invited you as a guardian.',
-            data={'type': 'guardian_invite', 'link_id': str(link.id)},
-        )
-
-        logger.info("[Guardian] Invite sent: %s → %s (link_id=%d)", device_id, guardian_device_id, link.id)
-        return jsonify({'status': 'ok', 'link': link.to_dict()}), 201
-
-    except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 401
-    except Exception as exc:
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
-
-
-@app.route('/api/auth/guardian/respond', methods=['POST'])
-def respond_to_invite():
-    """
-    Guardian accepts or rejects a pending invite.
-    Accepts: { "link_id": 1, "accept": true }
-    """
-    try:
-        device_id, role = _verify_token(request)
-        if role != 'guardian':
-            return jsonify({'status': 'error', 'message': 'Only guardian accounts can respond to invites'}), 403
-
-        body = request.get_json()
-        if not body or 'link_id' not in body:
-            return jsonify({'status': 'error', 'message': 'link_id is required'}), 400
-
-        link = DB.session.get(GuardianLink, body['link_id'])
-        if not link:
-            return jsonify({'status': 'error', 'message': 'Invite not found'}), 404
-
-        if link.guardian_device_id != device_id:
-            return jsonify({'status': 'error', 'message': 'This invite is not for you'}), 403
-
-        if link.status != 'pending':
-            return jsonify({'status': 'error', 'message': f'Invite already {link.status}'}), 400
-
-        accept = body.get('accept', False)
-        link.status = 'active' if accept else 'revoked'
-        DB.session.commit()
-
-        # Notify the user
-        action = 'accepted' if accept else 'declined'
-        notify_device_alerts(
-            link.user_device_id,
-            title=f'Guardian {action.title()}',
-            body=f'Guardian on device {device_id} has {action} your invite.',
-            data={'type': 'guardian_response', 'link_id': str(link.id), 'action': action},
-        )
-
-        logger.info("[Guardian] Invite %s: link_id=%d by %s", action, link.id, device_id)
-        return jsonify({'status': 'ok', 'link': link.to_dict()}), 200
-
-    except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 401
-    except Exception as exc:
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
-
-
-@app.route('/api/auth/guardian/links', methods=['GET'])
-def list_guardian_links():
-    """
-    List all guardian links for the authenticated user.
-    - User role: shows all guardians linked to their device
-    - Guardian role: shows all devices they are guarding
-    """
-    try:
-        device_id, role = _verify_token(request)
-
-        if role == 'user':
-            links = GuardianLink.query.filter_by(user_device_id=device_id).all()
-        else:
-            links = GuardianLink.query.filter_by(guardian_device_id=device_id).all()
-
-        return jsonify({
-            'status': 'ok',
-            'count': len(links),
-            'links': [l.to_dict() for l in links],
-        }), 200
-
-    except ValueError as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 401
-    except Exception as exc:
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
-
-
-@app.route('/api/auth/guardian/revoke', methods=['POST'])
-def revoke_guardian():
-    """
-    User or guardian can revoke an active link.
-    Accepts: { "link_id": 1 }
-    """
-    try:
-        device_id, role = _verify_token(request)
-        body = request.get_json()
-        if not body or 'link_id' not in body:
-            return jsonify({'status': 'error', 'message': 'link_id is required'}), 400
-
-        link = DB.session.get(GuardianLink, body['link_id'])
-        if not link:
-            return jsonify({'status': 'error', 'message': 'Link not found'}), 404
-
-        # Either the user or guardian can revoke
-        if link.user_device_id != device_id and link.guardian_device_id != device_id:
-            return jsonify({'status': 'error', 'message': 'Access denied'}), 403
-
-        link.status = 'revoked'
-        DB.session.commit()
-
-        logger.info("[Guardian] Link revoked: link_id=%d by %s (%s)", link.id, device_id, role)
-        return jsonify({'status': 'ok', 'link': link.to_dict()}), 200
-
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 401
     except Exception as exc:
@@ -766,7 +574,7 @@ def update_user_config():
                     return jsonify({'status': 'error', 'message': f'Invalid phone number for {key}'}), 400
                 config[key] = val
         config['device_id'] = device_id
-        config['updated_at'] = datetime.datetime.now(_UTC).isoformat()
+        config['updated_at'] = datetime.datetime.now(_IST).isoformat()
 
         _save_device_config(device_id, config)
         logger.info("Config updated for device %s", device_id)
@@ -1017,7 +825,7 @@ def receive_alert():
         else:
             alert_obj = Alert(
                 device_id           = device_id,
-                timestamp           = datetime.datetime.now(_UTC),
+                timestamp           = datetime.datetime.now(_IST),
                 alert_type          = data.get('alert_type'),
                 trigger_source      = data.get('trigger_source'),
                 call_placed_status  = str(data.get('call_placed_status',  'false')).lower() == 'true',
@@ -1062,40 +870,7 @@ def receive_alert():
             data={'alert_id': str(alert_obj.id), 'type': alert_type},
         )
 
-        # Also notify linked guardians (they have a different device_id)
-        try:
-            linked_guardians = GuardianLink.query.filter_by(
-                user_device_id=device_id, status='active'
-            ).all()
-            for link in linked_guardians:
-                notify_device_alerts(
-                    link.guardian_device_id,
-                    title=f'{alert_type} Alert — Kavach',
-                    body=f'Alert from device {device_id}. Check the app for details.',
-                    data={'alert_id': str(alert_obj.id), 'type': alert_type},
-                )
-        except Exception:
-            pass  # don't fail the upload for guardian notification errors
-
-        # ── 11. SocketIO broadcast to subscribed app clients ────────────────
-        if _SOCKETIO_AVAILABLE:
-            try:
-                alert_payload = {
-                    'alert_id': alert_obj.id,
-                    'device_id': device_id,
-                    'alert_type': alert_type,
-                    'gps_location': location_data,
-                    'battery': data.get('battery_percentage'),
-                    'timestamp': datetime.datetime.now(_UTC).isoformat(),
-                }
-                # Broadcast to device room (user app) and linked guardian rooms
-                socketio.emit('alert', alert_payload, room=f'device_{device_id}')
-                for link in linked_guardians:
-                    socketio.emit('alert', alert_payload, room=f'device_{link.guardian_device_id}')
-            except Exception:
-                pass  # don't fail the upload for SocketIO errors
-
-        # ── 12. Build response ───────────────────────────────────────────────
+        # ── 11. Build response ───────────────────────────────────────────────
         response = {
             'status':       'ok',
             'request_id':   rid,
@@ -1131,7 +906,7 @@ def health():
             else None
         )
         uptime_seconds = int(
-            (datetime.datetime.now(_UTC) - _SERVER_START_TIME).total_seconds()
+            (datetime.datetime.now(_IST) - _SERVER_START_TIME).total_seconds()
         )
         return jsonify({
             'status':        'ok',
@@ -1311,60 +1086,6 @@ def uploaded_file(filename):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SocketIO events — real-time GPS streaming and alert broadcast
-# ─────────────────────────────────────────────────────────────────────────────
-if _SOCKETIO_AVAILABLE:
-
-    @socketio.on('connect')
-    def handle_connect(auth=None):
-        """Client connected to SocketIO."""
-        logger.info('[SocketIO] Client connected')
-
-    @socketio.on('join_device')
-    def handle_join_device(data):
-        """App client subscribes to a device room for real-time updates."""
-        device_id = data.get('device_id') if isinstance(data, dict) else None
-        if device_id:
-            join_room(f'device_{device_id}')
-            emit('joined', {'device_id': device_id, 'status': 'subscribed'})
-            logger.info('[SocketIO] Client joined room: device_%s', device_id)
-
-    @socketio.on('gps_update')
-    def handle_gps_update(data):
-        """
-        Device sends GPS coordinates. Server broadcasts to subscribed app clients.
-        Expected data: { device_id, lat, lng, battery, signal }
-        """
-        device_id = data.get('device_id')
-        lat = data.get('lat')
-        lng = data.get('lng')
-        battery = data.get('battery')
-
-        if not device_id or lat is None or lng is None:
-            return
-
-        # Update in-memory device status (same as config poll heartbeat)
-        if battery:
-            _update_device_status(device_id, str(battery))
-
-        # Broadcast to all subscribers of this device
-        emit('location', {
-            'device_id': device_id,
-            'lat': lat,
-            'lng': lng,
-            'battery': battery,
-            'timestamp': datetime.datetime.now(_UTC).isoformat(),
-        }, room=f'device_{device_id}')
-
-    @socketio.on('alert_event')
-    def handle_alert_event(data):
-        """Real-time alert broadcast to all subscribers of this device."""
-        device_id = data.get('device_id')
-        if device_id:
-            emit('alert', data, room=f'device_{device_id}')
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Ngrok tunnel helper
 # ─────────────────────────────────────────────────────────────────────────────
 NGROK_DOMAIN = "unpropitious-braelyn-blossomy.ngrok-free.dev"
@@ -1424,10 +1145,9 @@ if __name__ == '__main__':
         DB.create_all()
 
     logger.info("=" * 60)
-    logger.info(" Kavach Server v4.0 starting")
+    logger.info(" Kavach Server v4.1 starting")
     logger.info(" Database: kavach.db")
     logger.info(" Upload dir: %s", UPLOAD_DIR)
-    logger.info(" SocketIO: %s", "ENABLED" if _SOCKETIO_AVAILABLE else "DISABLED")
     logger.info(" FCM: %s", "configured" if os.environ.get('FIREBASE_CREDENTIALS') else "stub mode")
     logger.info(" Endpoints:")
     logger.info("   POST /api/alerts              — receive telemetry")
@@ -1453,9 +1173,4 @@ if __name__ == '__main__':
 
     threading.Thread(target=_open_browser, daemon=True).start()
 
-    # Use SocketIO runner if available (enables WebSocket support),
-    # otherwise fall back to plain Flask
-    if _SOCKETIO_AVAILABLE:
-        socketio.run(app, host='0.0.0.0', port=8080, debug=False)
-    else:
-        app.run(host='0.0.0.0', port=8080, debug=False)
+    app.run(host='0.0.0.0', port=8080, debug=False)

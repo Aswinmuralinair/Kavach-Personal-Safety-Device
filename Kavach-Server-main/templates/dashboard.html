@@ -8,31 +8,31 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         :root {
-            --bg-page: #0f1117;
-            --bg-white: #1a1d27;
-            --bg-hover: #22252f;
-            --accent: #00bcd4;
-            --accent-light: rgba(0,188,212,0.1);
-            --danger: #ef4444;
-            --danger-light: rgba(239,68,68,0.1);
-            --danger-border: rgba(239,68,68,0.3);
-            --success: #22c55e;
-            --success-light: rgba(34,197,94,0.1);
-            --success-border: rgba(34,197,94,0.3);
-            --warning: #f59e0b;
-            --warning-light: rgba(245,158,11,0.1);
-            --medical: #a855f7;
-            --medical-light: rgba(168,85,247,0.1);
-            --medical-border: rgba(168,85,247,0.3);
-            --text-primary: #e8eaed;
-            --text-secondary: #9ca3af;
-            --text-muted: #6b7280;
-            --border: #2a2d37;
-            --border-light: #22252f;
+            --bg-page: #f3f4f6;
+            --bg-white: #ffffff;
+            --bg-hover: #f0f1f3;
+            --accent: #0891b2;
+            --accent-light: rgba(8,145,178,0.08);
+            --danger: #dc2626;
+            --danger-light: rgba(220,38,38,0.08);
+            --danger-border: rgba(220,38,38,0.25);
+            --success: #16a34a;
+            --success-light: rgba(22,163,74,0.08);
+            --success-border: rgba(22,163,74,0.25);
+            --warning: #d97706;
+            --warning-light: rgba(217,119,6,0.08);
+            --medical: #9333ea;
+            --medical-light: rgba(147,51,234,0.08);
+            --medical-border: rgba(147,51,234,0.25);
+            --text-primary: #111827;
+            --text-secondary: #4b5563;
+            --text-muted: #9ca3af;
+            --border: #e5e7eb;
+            --border-light: #f3f4f6;
             --radius: 12px;
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
-            --shadow-md: 0 2px 12px rgba(0,0,0,0.3);
-            --glow: 0 0 20px rgba(0,188,212,0.15);
+            --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md: 0 2px 12px rgba(0,0,0,0.08);
+            --glow: 0 0 20px rgba(8,145,178,0.1);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -47,7 +47,7 @@
         /* ── Splash Overlay ────────────────────────────────── */
         .splash-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #0a0c10;
+            background: #ffffff;
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
             z-index: 9999;
@@ -58,14 +58,14 @@
             width: 140px; height: 140px;
             border-radius: 28px; object-fit: cover;
             animation: splashPulse 2s ease-in-out infinite;
-            box-shadow: 0 0 60px rgba(0,188,212,0.3);
+            box-shadow: 0 0 60px rgba(8,145,178,0.2);
         }
         @keyframes splashPulse {
-            0%, 100% { transform: scale(1); box-shadow: 0 0 60px rgba(0,188,212,0.3); }
-            50% { transform: scale(1.05); box-shadow: 0 0 80px rgba(0,188,212,0.5); }
+            0%, 100% { transform: scale(1); box-shadow: 0 0 60px rgba(8,145,178,0.2); }
+            50% { transform: scale(1.05); box-shadow: 0 0 80px rgba(8,145,178,0.35); }
         }
         .splash-title {
-            font-size: 42px; font-weight: 800; color: #fff; margin-top: 24px;
+            font-size: 42px; font-weight: 800; color: #111827; margin-top: 24px;
             letter-spacing: 8px; text-transform: uppercase;
         }
         .splash-caption {
@@ -76,7 +76,7 @@
         @keyframes fadeIn { to { opacity: 1; } }
         .splash-line {
             width: 60px; height: 2px;
-            background: linear-gradient(90deg, transparent, var(--accent), transparent);
+            background: linear-gradient(90deg, transparent, #0891b2, transparent);
             margin-top: 20px; animation: fadeIn 1s ease 0.8s forwards; opacity: 0;
         }
 
@@ -103,7 +103,7 @@
         }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         .logout-btn {
-            padding: 6px 14px; background: var(--bg-page); border: 1px solid var(--border);
+            padding: 6px 14px; background: var(--bg-white); border: 1px solid var(--border);
             border-radius: 8px; font-size: 13px; color: var(--text-secondary);
             cursor: pointer; text-decoration: none; transition: all 0.15s;
         }
@@ -145,7 +145,7 @@
         .panel-header .sub { font-size: 12px; color: var(--text-muted); font-weight: 400; }
 
         /* ── Map ────────────────────────────────────────── */
-        #map { height: 420px; width: 100%; background: var(--bg-page); }
+        #map { height: 420px; width: 100%; background: #e8ecf0; }
 
         /* ── Device Cards ───────────────────────────────── */
         .device-list { max-height: 420px; overflow-y: auto; padding: 12px; }
@@ -294,7 +294,7 @@
         <div class="header-left">
             <div class="logo-mark">
                 <img src="/static/kavach_logo.jpeg" alt="K"
-                     onerror="this.parentElement.innerHTML='<div style=&quot;width:36px;height:36px;background:linear-gradient(135deg,#00bcd4,#7c3aed);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px;&quot;>K</div>'">
+                     onerror="this.parentElement.innerHTML='<div style=&quot;width:36px;height:36px;background:linear-gradient(135deg,#0891b2,#7c3aed);border-radius:10px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px;&quot;>K</div>'">
             </div>
             <h1>KAVACH</h1>
             <span class="header-badge">Admin</span>
@@ -367,7 +367,7 @@
 
     // ── Map ──────────────────────────────────────────────
     const map = L.map('map', { zoomControl: true, attributionControl: false }).setView([20.5937, 78.9629], 5);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
     const markers = L.layerGroup().addTo(map);
 
     function makeIcon(color) {
@@ -378,7 +378,7 @@
     }
     const sosIcon = makeIcon('#ef4444');
     const medicalIcon = makeIcon('#a855f7');
-    const defaultIcon = makeIcon('#00bcd4');
+    const defaultIcon = makeIcon('#0891b2');
 
     // ── Store alerts globally for detail lookups ─────────
     let allAlerts = [];

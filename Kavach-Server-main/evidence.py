@@ -15,11 +15,11 @@ import hashlib
 import json
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-_UTC = timezone.utc
+_IST = timezone(timedelta(hours=5, minutes=30), name='IST')   # Indian Standard Time
 LEDGER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'evidence_ledger.json')
 
 
@@ -49,7 +49,7 @@ def append_to_ledger(evidence_id: int, sha256_hash: str, file_path: str, alert_i
         'alert_id': alert_id,
         'sha256': sha256_hash,
         'file': os.path.basename(file_path),
-        'timestamp': datetime.now(_UTC).isoformat(),
+        'timestamp': datetime.now(_IST).isoformat(),
     }
 
     # Read existing chain

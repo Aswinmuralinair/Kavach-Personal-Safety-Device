@@ -11,11 +11,6 @@ itsdangerous>=2.0
 # ── Encryption (ChaCha20-Poly1305 for device telemetry) ─────────────────────
 cryptography>=41.0
 
-# ── SocketIO — real-time GPS streaming + alert broadcast ────────────────────
-# Enables WebSocket communication between device, server, and app.
-# If not installed, server falls back to HTTP-only mode (no real-time).
-flask-socketio>=5.3
-
 # ── Firebase Cloud Messaging (FCM) — push notifications ─────────────────────
 # Optional: only needed if you set FIREBASE_CREDENTIALS env var.
 # If not installed, push notifications are silently disabled.

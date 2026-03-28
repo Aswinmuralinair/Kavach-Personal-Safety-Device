@@ -5,7 +5,6 @@ class AlertModel {
   final String? alertType;
   final String? triggerSource;
   final bool callPlacedStatus;
-  final bool guardianSmsStatus;
   final bool locationSmsStatus;
   final String? gpsLocation;
   final String? locationSource;
@@ -20,7 +19,6 @@ class AlertModel {
     this.alertType,
     this.triggerSource,
     this.callPlacedStatus = false,
-    this.guardianSmsStatus = false,
     this.locationSmsStatus = false,
     this.gpsLocation,
     this.locationSource,
@@ -37,7 +35,6 @@ class AlertModel {
       alertType: json['alert_type'],
       triggerSource: json['trigger_source'],
       callPlacedStatus: json['call_placed_status'] == true,
-      guardianSmsStatus: json['guardian_sms_status'] == true,
       locationSmsStatus: json['location_sms_status'] == true,
       gpsLocation: json['gps_location'],
       locationSource: json['location_source'],

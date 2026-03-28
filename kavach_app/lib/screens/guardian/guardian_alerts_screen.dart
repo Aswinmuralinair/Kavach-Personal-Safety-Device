@@ -261,7 +261,7 @@ class _GuardianAlertCardState extends State<_GuardianAlertCard> {
                   _InfoRow('Call Placed',
                       alert.callPlacedStatus ? 'Yes' : 'No'),
                   _InfoRow('SMS Sent',
-                      alert.guardianSmsStatus ? 'Yes' : 'No'),
+                      alert.locationSmsStatus ? 'Yes' : 'No'),
                   if (alert.batteryPercentage != null)
                     _InfoRow('Battery',
                         '${alert.batteryPercentage!.toStringAsFixed(0)}%'),

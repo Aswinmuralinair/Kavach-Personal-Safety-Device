@@ -285,7 +285,7 @@ def sos_sequence(sim: SIM7600, trigger_source: str = "button",
 
     alert_row = Alert(
         device_id          = config['device_id'],
-        timestamp          = datetime.now(timezone.utc),
+        timestamp          = datetime.now(timezone(timedelta(hours=5, minutes=30))),
         trigger_source     = trigger_source,
         alert_type         = "SOS",
         battery_percentage = "N/A" if not I2C_AVAILABLE else None,
@@ -421,7 +421,7 @@ def medical_sequence(sim: SIM7600, cam=None, mic=None, **kwargs) -> None:
 
     alert_row = Alert(
         device_id          = config['device_id'],
-        timestamp          = datetime.now(timezone.utc),
+        timestamp          = datetime.now(timezone(timedelta(hours=5, minutes=30))),
         trigger_source     = "double_press",
         alert_type         = "MEDICAL",
         battery_percentage = "N/A" if not I2C_AVAILABLE else None,

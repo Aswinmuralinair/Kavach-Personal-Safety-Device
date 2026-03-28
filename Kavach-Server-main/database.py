@@ -4,7 +4,6 @@ database.py — Kavach Server
 SQLAlchemy models:
   - Alert          — SOS/MEDICAL alert records from the device
   - Evidence       — individual evidence files with SHA-256 hashes
-  - GuardianLink   — in-app guardian invite system (pending/active/revoked)
 """
 
 from flask_sqlalchemy import SQLAlchemy
@@ -12,7 +11,7 @@ import datetime
 
 DB = SQLAlchemy()
 
-_UTC = datetime.timezone.utc   # single alias, works on Python 3.2+
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30), name='IST')   # Indian Standard Time
 
 
 class Alert(DB.Model):
@@ -23,7 +22,7 @@ class Alert(DB.Model):
 
     # ── When and who ──────────────────────────────────────────────────────────
     # Lambda ensures each row gets the current time, not a fixed import-time value
-    timestamp  = DB.Column(DB.DateTime, default=lambda: datetime.datetime.now(_UTC))
+    timestamp  = DB.Column(DB.DateTime, default=lambda: datetime.datetime.now(_IST))
     device_id  = DB.Column(DB.String(64), nullable=False)
 
     # ── Alert classification ──────────────────────────────────────────────────
@@ -63,7 +62,7 @@ class Evidence(DB.Model):
     sha256_hash = DB.Column(DB.String(64), nullable=False)   # hex digest
     file_type = DB.Column(DB.String(16), nullable=False)     # 'video', 'audio', 'image'
     file_size = DB.Column(DB.Integer, nullable=True)         # bytes
-    created_at = DB.Column(DB.DateTime, default=lambda: datetime.datetime.now(_UTC))
+    created_at = DB.Column(DB.DateTime, default=lambda: datetime.datetime.now(_IST))
 
     # Relationship back to Alert
     alert = DB.relationship('Alert', backref=DB.backref('evidence_files', lazy='dynamic'))
@@ -81,41 +80,3 @@ class Evidence(DB.Model):
 
     def __repr__(self):
         return f"<Evidence(id={self.id}, alert={self.alert_id}, file='{self.filename}')>"
-
-
-class GuardianLink(DB.Model):
-    """
-    In-app guardian invite system.
-
-    A 'user' invites a 'guardian' by specifying the guardian's device_id.
-    The guardian sees the pending invite in their app and can accept or reject.
-
-    Status flow: pending → active (accepted) or revoked (rejected/removed)
-    """
-    __tablename__ = 'guardian_links'
-
-    id = DB.Column(DB.Integer, primary_key=True)
-
-    # The device owner who sent the invite
-    user_device_id = DB.Column(DB.String(64), nullable=False)
-
-    # The guardian who received the invite
-    guardian_device_id = DB.Column(DB.String(64), nullable=False)
-
-    # 'pending' = awaiting response, 'active' = accepted, 'revoked' = rejected/removed
-    status = DB.Column(DB.String(16), default='pending', nullable=False)
-
-    created_at = DB.Column(DB.DateTime, default=lambda: datetime.datetime.now(_UTC))
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'user_device_id': self.user_device_id,
-            'guardian_device_id': self.guardian_device_id,
-            'status': self.status,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-        }
-
-    def __repr__(self):
-        return (f"<GuardianLink(id={self.id}, user='{self.user_device_id}', "
-                f"guardian='{self.guardian_device_id}', status='{self.status}')>")

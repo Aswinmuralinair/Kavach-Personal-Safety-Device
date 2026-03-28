@@ -57,7 +57,7 @@ import threading
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
@@ -646,7 +646,7 @@ class LoRaManager:
             trigger=trigger_source,
             gps_location=gps_location,
             battery=battery,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat(),
         )
         return self._send_with_retry(packet)
 
@@ -658,7 +658,7 @@ class LoRaManager:
             trigger="double_press",
             gps_location=gps_location,
             battery=battery,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat(),
         )
         return self._send_with_retry(packet)
 
@@ -670,7 +670,7 @@ class LoRaManager:
             trigger="long_press",
             gps_location="N/A",
             battery="N/A",
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(timezone(timedelta(hours=5, minutes=30))).isoformat(),
         )
         return self._send_with_retry(packet)
 

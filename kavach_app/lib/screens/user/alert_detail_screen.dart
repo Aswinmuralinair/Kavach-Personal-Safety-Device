@@ -188,10 +188,10 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                 ),
                 _DetailRow(
                   icon: Icons.sms,
-                  label: 'Guardian SMS',
+                  label: 'SMS Sent',
                   value:
-                      _alert?['guardian_sms_status'] == true ? 'Sent' : 'Not Sent',
-                  valueColor: _alert?['guardian_sms_status'] == true
+                      _alert?['location_sms_status'] == true ? 'Sent' : 'Not Sent',
+                  valueColor: _alert?['location_sms_status'] == true
                       ? Colors.green
                       : Colors.red,
                 ),

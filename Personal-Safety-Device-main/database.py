@@ -11,7 +11,7 @@ import datetime
 
 Base = declarative_base()
 
-_UTC = datetime.timezone.utc
+_IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30), name='IST')   # Indian Standard Time
 
 
 class Alert(Base):
@@ -20,7 +20,7 @@ class Alert(Base):
     id        = Column(Integer, primary_key=True)
 
     # Lambda ensures each row gets the current time, not a fixed import-time value
-    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(_UTC))
+    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(_IST))
     device_id = Column(String(64), nullable=False)
 
     # Status fields for each action

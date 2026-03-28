@@ -198,7 +198,7 @@ class _AlertCard extends StatelessWidget {
                   _StatusChip(
                     icon: Icons.sms,
                     label: 'SMS',
-                    active: alert.guardianSmsStatus,
+                    active: alert.locationSmsStatus,
                   ),
                   const SizedBox(width: 8),
                   _StatusChip(
