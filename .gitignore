@@ -1,9 +1,26 @@
-# Secrets
-Kavach-Server-main/.secret_key
-Kavach-Server-main/app_users.json
-Kavach-Server-main/device_configs/
+# ── Secrets — never commit anything in this block ──────────────────────────
+# The shared ChaCha20 key. Generate your own; never share one.
 Personal-Safety-Device-main/keys/
 Kavach-Server-main/keys/
+
+# Device config: holds device_key, API tokens and emergency phone numbers.
+# Start from Personal-Safety-Device-main/config.example.json instead.
+Personal-Safety-Device-main/config.json
+
+# Server credentials generated on first boot.
+Kavach-Server-main/.secret_key
+Kavach-Server-main/.server_secrets.json
+
+# Account password hashes, pairing codes, push tokens.
+Kavach-Server-main/app_users.json
+Kavach-Server-main/pairing_codes.json
+Kavach-Server-main/fcm_tokens.json
+Kavach-Server-main/device_configs/
+
+# Firebase credentials, if push notifications are ever enabled.
+google-services.json
+**/google-services.json
+firebase-service-account*.json
 
 # Python
 __pycache__/
@@ -15,6 +32,8 @@ venv/
 
 # Evidence / uploads (runtime data)
 Personal-Safety-Device-main/evidence/
+Personal-Safety-Device-main/models/
+Personal-Safety-Device-main/contact_changes.log
 Kavach-Server-main/uploads/
 Kavach-Server-main/evidence_ledger.json
 

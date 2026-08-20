@@ -54,6 +54,8 @@ import time
 import logging
 import json
 import os
+import datetime
+import tempfile
 
 from enum import Enum, auto
 from database import Base
@@ -333,11 +335,19 @@ def _config_poll_loop(config: dict, power_monitor=None) -> None:
 
     syncable_keys = {'police_number', 'guardian_number', 'medical_number', 'whatsapp_number'}
 
+    # Remembers the last pairing code we printed, so it is shown when it first
+    # appears (or changes) rather than on every 10-second poll.
+    _shown_pairing_code = [None]
+
     while True:
         time.sleep(CONFIG_POLL_INTERVAL)
         try:
             import requests
             battery_str = _read_battery(power_monitor)
+            # Re-read each cycle: the server writes a fresh device_key into
+            # config.json on its first run, and we should pick that up without
+            # needing a device restart.
+            device_key = load_config().get('device_key', device_key)
             r = requests.get(
                 poll_url,
                 headers={
@@ -350,7 +360,23 @@ def _config_poll_loop(config: dict, power_monitor=None) -> None:
                 logger.debug("[ConfigSync] Server returned %d — skipping.", r.status_code)
                 continue
 
-            remote = r.json().get('config', {})
+            body = r.json()
+
+            # Show the pairing code once, so whoever is standing at the device
+            # can read it off this console and use it to create the app
+            # account. Without it the server refuses signup for this device.
+            nonlocal_code = body.get('pairing_code')
+            if nonlocal_code and nonlocal_code != _shown_pairing_code[0]:
+                _shown_pairing_code[0] = nonlocal_code
+                logger.info("")
+                logger.info("  ┌──────────────────────────────────────────────┐")
+                logger.info("   Pairing code for %-24s", device_id)
+                logger.info("            %s", nonlocal_code)
+                logger.info("   Enter this in the Kavach app when signing up.")
+                logger.info("  └──────────────────────────────────────────────┘")
+                logger.info("")
+
+            remote = body.get('config', {})
             if not remote:
                 logger.debug("[ConfigSync] No remote config yet — skipping.")
                 continue
@@ -371,13 +397,36 @@ def _config_poll_loop(config: dict, power_monitor=None) -> None:
             # Merge changes into local config.json
             local_config.update(changes)
             config_path = os.path.join(BASE_DIR, 'config.json')
-            with open(config_path, 'w') as f:
-                json.dump(local_config, f, indent=2)
+            # Write to a temp file in the same directory, then replace. A crash
+            # or power loss mid-write can no longer leave the device with a
+            # truncated config and no emergency numbers.
+            fd, tmp_path = tempfile.mkstemp(dir=BASE_DIR, suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'w') as f:
+                    json.dump(local_config, f, indent=2)
+                os.replace(tmp_path, config_path)
+            except Exception:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+                raise
 
-            logger.info(
-                "[ConfigSync] Config updated from server: %s",
+            # Emergency numbers are what this device dials when someone is in
+            # trouble, so a change to them is logged at WARNING and written to
+            # a local audit trail. If a number was ever changed without the
+            # wearer's knowledge, this file is the evidence.
+            logger.warning(
+                "[ConfigSync] EMERGENCY CONTACTS CHANGED: %s",
                 ', '.join(f"{k}={v}" for k, v in changes.items())
             )
+            try:
+                audit_path = os.path.join(BASE_DIR, 'contact_changes.log')
+                with open(audit_path, 'a', encoding='utf-8') as af:
+                    af.write(
+                        f"{datetime.datetime.now().isoformat()} "
+                        f"{json.dumps(changes)}\n"
+                    )
+            except OSError as exc:
+                logger.error("[ConfigSync] Could not write audit log: %s", exc)
 
         except Exception as exc:
             logger.debug("[ConfigSync] Poll failed (server may be offline): %s", exc)

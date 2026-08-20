@@ -91,8 +91,14 @@ class ApiService {
     return _handleResponse(response);
   }
 
+  /// Create an account for a device.
+  ///
+  /// [pairingCode] proves you actually have access to this device. Find it in
+  /// the Kavach server console, on the admin dashboard, or printed by the
+  /// device itself. Without it the server refuses the signup, which is what
+  /// stops a stranger claiming someone else's device.
   static Future<Map<String, dynamic>> signup(
-      String deviceId, String role, String password) async {
+      String deviceId, String role, String password, String pairingCode) async {
     final response = await http.post(
       Uri.parse('$baseUrl/api/auth/signup'),
       headers: _jsonHeaders(),
@@ -100,6 +106,7 @@ class ApiService {
         'device_id': deviceId,
         'role': role,
         'password': password,
+        'pairing_code': pairingCode,
       }),
     );
     return _handleResponse(response);
@@ -171,12 +178,20 @@ class ApiService {
     return _handleResponse(response);
   }
 
+  /// Update the numbers the device calls in an emergency.
+  ///
+  /// Requires the account password again. These four numbers decide where an
+  /// SOS actually goes, so a phone left unlocked with a live session is not
+  /// enough to change them.
   static Future<Map<String, dynamic>> updateConfig(
-      Map<String, String> numbers) async {
+      Map<String, String> numbers, String currentPassword) async {
     final response = await http.put(
       Uri.parse('$baseUrl/api/user/config'),
       headers: await _authHeaders(),
-      body: jsonEncode(numbers),
+      body: jsonEncode({
+        ...numbers,
+        'current_password': currentPassword,
+      }),
     );
     return _handleResponse(response);
   }

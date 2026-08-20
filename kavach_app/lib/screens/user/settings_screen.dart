@@ -47,7 +47,58 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
+  /// Ask for the account password before changing emergency contacts.
+  ///
+  /// These numbers decide where an SOS actually goes, so an unlocked phone
+  /// with a live session should not be enough to redirect them.
+  Future<String?> _promptForPassword() async {
+    final controller = TextEditingController();
+    final password = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm it\'s you'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'These are the numbers your device calls in an emergency. '
+              'Enter your account password to change them.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              obscureText: true,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Password',
+                prefixIcon: Icon(Icons.lock),
+              ),
+              onSubmitted: (v) => Navigator.pop(dialogContext, v),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, controller.text),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    return password;
+  }
+
   Future<void> _saveConfig() async {
+    final password = await _promptForPassword();
+    if (password == null || password.isEmpty) return;   // cancelled
+    if (!mounted) return;
+
     setState(() {
       _saving = true;
       _error = null;
@@ -59,7 +110,7 @@ class _UserSettingsScreenState extends State<UserSettingsScreen> {
         'guardian_number': _guardianController.text.trim(),
         'medical_number': _medicalController.text.trim(),
         'whatsapp_number': _whatsappController.text.trim(),
-      });
+      }, password);
       if (result['status'] == 'ok') {
         _success = 'Settings saved! Changes will sync to your device.';
       } else {

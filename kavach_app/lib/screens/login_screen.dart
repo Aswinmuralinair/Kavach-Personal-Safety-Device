@@ -15,6 +15,11 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _deviceIdController = TextEditingController(text: 'KAVACH-001');
   final _passwordController = TextEditingController();
+  final _pairingCodeController = TextEditingController();
+
+  /// Minimum password length. Must match MIN_PASSWORD_LENGTH on the server.
+  static const int _minPasswordLength = 8;
+
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _isSignUp = false; // toggle between Login and Sign Up
@@ -52,9 +57,19 @@ class _LoginScreenState extends State<LoginScreen> {
         });
         return;
       }
-      if (_isSignUp && password.length < 4) {
+      if (_isSignUp && password.length < _minPasswordLength) {
         setState(() {
-          _error = 'Password must be at least 4 characters';
+          _error = 'Password must be at least $_minPasswordLength characters';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final pairingCode = _pairingCodeController.text.trim();
+      if (_isSignUp && pairingCode.isEmpty) {
+        setState(() {
+          _error = 'Enter the pairing code shown by your Kavach server '
+              'or device.';
           _isLoading = false;
         });
         return;
@@ -62,7 +77,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final Map<String, dynamic> result;
       if (_isSignUp) {
-        result = await ApiService.signup(deviceId, _selectedRole!, password);
+        result = await ApiService.signup(
+            deviceId, _selectedRole!, password, pairingCode);
       } else {
         result = await ApiService.login(deviceId, _selectedRole!, password);
       }
@@ -99,6 +115,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _deviceIdController.dispose();
     _passwordController.dispose();
+    _pairingCodeController.dispose();
     super.dispose();
   }
 
@@ -261,6 +278,23 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 16),
 
+                // Pairing code — sign up only
+                if (_isSignUp) ...[
+                  TextField(
+                    controller: _pairingCodeController,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                      labelText: 'Pairing Code',
+                      hintText: 'e.g. K7RQ2MXP',
+                      prefixIcon: Icon(Icons.vpn_key),
+                      helperText: 'Shown in the Kavach server console, on the '
+                          'dashboard, or by the device itself.',
+                      helperMaxLines: 3,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
                 // Password field
                 TextField(
                   controller: _passwordController,
@@ -268,7 +302,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   decoration: InputDecoration(
                     labelText: _isSignUp ? 'Create Password' : 'Password',
                     hintText: _isSignUp
-                        ? 'Min 4 characters'
+                        ? 'Min $_minPasswordLength characters'
                         : 'Enter your password',
                     prefixIcon: const Icon(Icons.lock),
                     suffixIcon: IconButton(

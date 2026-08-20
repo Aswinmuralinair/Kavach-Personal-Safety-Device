@@ -42,3 +42,45 @@ static const String baseUrl = 'https://your-name.ngrok-free.dev';
 ```
 
 Change this to your ngrok domain before building.
+
+## Creating an account
+
+Each device supports one **user** account (the person carrying it) and one
+**guardian** account (the person watching over them).
+
+Sign-up requires the device's **pairing code** — an 8-character code that proves
+you actually have access to the device. Without it, anyone who guessed a device ID
+could register as its user and change the numbers it dials in an emergency.
+
+Find the code in any of these places:
+
+- the Raspberry Pi's console, a few seconds after `python main.py` starts
+- the Kavach server console at startup
+- the admin dashboard, on the device card — click it to copy
+
+Then in the app: **Sign Up** → Device ID → role → pairing code → a password of at
+least 8 characters.
+
+Changing the emergency contacts later asks for that password again. That is
+deliberate: an unlocked phone with a live session should not be enough to redirect
+where an SOS goes.
+
+## Notifications — read this before demoing
+
+The app **polls** the server every few seconds while it is open. There are no push
+notifications: if the app is backgrounded or closed, nothing reaches the phone.
+
+The server side of Firebase Cloud Messaging is written and ready, but this app has
+no Firebase client wired in. To enable real background alerts, follow *Enabling push
+notifications* in [SETUP.md](../SETUP.md).
+
+## Before publishing
+
+The release build is signed with Flutter's **debug key**
+(`android/app/build.gradle.kts`). That is fine for sideloading and demos, but you
+must add a real signing config before submitting to the Play Store.
+
+## Full setup
+
+For the complete walkthrough — encryption key, server, device, then this app — see
+[SETUP.md](../SETUP.md) in the repository root.

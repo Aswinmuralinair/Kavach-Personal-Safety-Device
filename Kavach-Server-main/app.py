@@ -38,9 +38,11 @@ from flask_cors import CORS
 from functools import wraps
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import os
+import re
 import sys
 import json
 import base64
+import hmac
 import logging
 import datetime
 import uuid
@@ -53,6 +55,9 @@ from utils import save_file_safe, compute_sha256, decrypt_file_in_place
 from crypto_utils import chacha_decrypt_text
 from evidence import file_type_from_ext, append_to_ledger
 from notifications import notify_device_alerts, store_fcm_token
+import pairing
+import secrets_manager
+from ratelimit import rate_limit
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging - structured, goes to stdout (visible in server terminal)
@@ -116,9 +121,27 @@ def _get_device_status(device_id: str) -> dict:
     }
 
 
+_DEVICE_ID_RE = re.compile(r'^[A-Za-z0-9._-]{1,64}$')
+
+
+def _safe_device_id(device_id: str) -> str:
+    """
+    Validate a device_id before it is used to build a filesystem path.
+
+    device_id arrives from URL segments and JSON bodies, and both
+    _load_device_config and _save_device_config interpolate it straight into a
+    filename. Without this, '../../..' style values would read and write
+    outside device_configs/.
+    """
+    device_id = (device_id or '').strip()
+    if not _DEVICE_ID_RE.match(device_id):
+        raise ValueError('Invalid device ID.')
+    return device_id
+
+
 def _load_device_config(device_id: str) -> dict:
     """Load device config from JSON file."""
-    path = os.path.join(CONFIG_DIR, f'{device_id}.json')
+    path = os.path.join(CONFIG_DIR, f'{_safe_device_id(device_id)}.json')
     if os.path.exists(path):
         with open(path, 'r') as f:
             return json.load(f)
@@ -127,7 +150,7 @@ def _load_device_config(device_id: str) -> dict:
 
 def _save_device_config(device_id: str, config: dict):
     """Save device config to JSON file."""
-    path = os.path.join(CONFIG_DIR, f'{device_id}.json')
+    path = os.path.join(CONFIG_DIR, f'{_safe_device_id(device_id)}.json')
     with open(path, 'w') as f:
         json.dump(config, f, indent=2)
 
@@ -167,16 +190,23 @@ _SERVER_START_TIME = datetime.datetime.now(_IST)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Admin credentials — CHANGE DEFAULTS before production use!
+# Admin credentials
+#
+# There is deliberately no hard-coded fallback here. secrets_manager resolves
+# env var → .server_secrets.json → freshly generated, and prints anything it
+# generates exactly once at startup. The password is only ever held as a
+# pbkdf2 hash in this process.
 # ─────────────────────────────────────────────────────────────────────────────
-ADMIN_USERNAME = os.environ.get('KAVACH_ADMIN_USER', 'admin')
-ADMIN_PASSWORD = os.environ.get('KAVACH_ADMIN_PASS', 'kavach2026')
+ADMIN_USERNAME      = secrets_manager.get_admin_username()
+ADMIN_PASSWORD_HASH = secrets_manager.get_admin_password_hash()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Device API key — the Raspberry Pi sends this in the X-Device-Key header
-# when polling /api/device/config.  Override via env var for production.
+# when polling /api/device/config. Generated on first boot and synced into the
+# device's config.json automatically when the device folder sits beside this
+# one; otherwise printed with copy-paste instructions.
 # ─────────────────────────────────────────────────────────────────────────────
-KAVACH_DEVICE_KEY = os.environ.get('KAVACH_DEVICE_KEY', 'kavach-device-key-2026')
+KAVACH_DEVICE_KEY = secrets_manager.get_secret('device_key', 'KAVACH_DEVICE_KEY')
 
 # ─────────────────────────────────────────────────────────────────────────────
 # App user accounts (stored in app_users.json)
@@ -235,45 +265,128 @@ def admin_required(f):
 # Auth helpers — used by API routes that need flexible authentication
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _is_admin() -> bool:
+    """True if this request carries the dashboard's admin session cookie."""
+    return bool(session.get('admin_logged_in'))
+
+
+def _token_identity():
+    """
+    Return (device_id, role) for a valid Bearer token, or None.
+
+    Unlike _verify_token this never raises, so it can be used in routes that
+    accept either an admin session or a token.
+    """
+    try:
+        return _verify_token(request)
+    except ValueError:
+        return None
+
+
 def _check_any_auth() -> bool:
     """
-    Return True if the request carries valid authentication:
-      1. Admin session cookie (from dashboard login), OR
-      2. Valid Bearer token (from mobile app login).
+    True if the request is authenticated at all — admin session or a valid
+    Bearer token.
+
+    AUTHENTICATION ONLY. This answers "is this someone we know?" and NOT
+    "may they see this particular device's data". Every route that returns
+    device-scoped data must use _authorize_device() instead; this helper is
+    reserved for routes whose response contains nothing device-specific.
     """
-    if session.get('admin_logged_in'):
+    return _is_admin() or _token_identity() is not None
+
+
+def _authorize_device(device_id: str) -> bool:
+    """
+    True if the caller may access data belonging to device_id.
+
+    The admin dashboard is intentionally cross-device — that is what an
+    operator console is for. An app token is confined to the single device it
+    was issued for, so one household's account can never read another's
+    location history or evidence.
+    """
+    if _is_admin():
         return True
-    try:
-        _verify_token(request)
-        return True
-    except (ValueError, Exception):
+    identity = _token_identity()
+    if identity is None:
         return False
+    token_device, _role = identity
+    return bool(device_id) and token_device == device_id
+
+
+def _device_id_for_alert(alert_id: int):
+    """Owning device_id for an alert, or None if the alert does not exist."""
+    alert = DB.session.get(Alert, alert_id)
+    return alert.device_id if alert else None
+
+
+def _device_id_for_filename(filename: str):
+    """
+    Owning device_id for an uploaded evidence file, or None if unknown.
+
+    Looks in the Evidence table first, which is the authoritative record.
+    Falls back to scanning Alert.uploaded_files so that files uploaded before
+    the Evidence table existed remain reachable by their rightful owner.
+    """
+    name = os.path.basename(filename or '')
+    if not name:
+        return None
+
+    ev = Evidence.query.filter_by(filename=name).first()
+    if ev:
+        return _device_id_for_alert(ev.alert_id)
+
+    match = Alert.query.filter(Alert.uploaded_files.contains(name)).first()
+    return match.device_id if match else None
 
 
 def _check_device_key() -> bool:
-    """Return True if the X-Device-Key header matches KAVACH_DEVICE_KEY."""
-    return request.headers.get('X-Device-Key') == KAVACH_DEVICE_KEY
+    """Constant-time comparison of the X-Device-Key header against the server key."""
+    supplied = request.headers.get('X-Device-Key', '')
+    if not supplied or not KAVACH_DEVICE_KEY:
+        return False
+    return hmac.compare_digest(supplied, KAVACH_DEVICE_KEY)
 
 
-def _create_download_token(filename: str) -> str:
+def _create_download_token(filename: str, device_id: str) -> str:
     """
-    Create a short-lived signed token for downloading a specific evidence file.
-    Used because the Flutter app opens files in an external browser which
-    cannot send Authorization headers — so we embed auth in the URL.
+    Create a short-lived signed token for downloading one evidence file.
+
+    Needed because the Flutter app hands evidence URLs to an external browser,
+    which cannot send an Authorization header. The token binds both the
+    filename and the owning device, so a link leaked from one household is
+    still useless against another's files.
     """
-    return _token_serializer.dumps({'filename': filename, 'type': 'download'})
+    return _token_serializer.dumps({
+        'filename':  os.path.basename(filename),
+        'device_id': device_id,
+        'type':      'download',
+    })
 
 
 def _verify_download_token(filename: str) -> bool:
-    """Verify a signed download token from the ?token= query parameter."""
+    """Verify the signed ?token= query parameter against this exact file."""
     token = request.args.get('token', '')
     if not token:
         return False
     try:
         data = _token_serializer.loads(token, max_age=3600)  # 1-hour expiry
-        return data.get('filename') == filename and data.get('type') == 'download'
     except (SignatureExpired, BadSignature, KeyError):
         return False
+
+    if data.get('type') != 'download':
+        return False
+    if data.get('filename') != os.path.basename(filename):
+        return False
+
+    # Tokens minted before device binding existed have no device_id. Reject
+    # them rather than honouring an unscoped link.
+    token_device = data.get('device_id')
+    if not token_device:
+        return False
+
+    owner = _device_id_for_filename(filename)
+    return owner is not None and owner == token_device
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -287,15 +400,23 @@ def _request_id() -> str:
 # Admin Login / Logout
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/login', methods=['GET', 'POST'])
+@rate_limit(10, 300, scope='admin_login')
 def login():
     error = None
     if request.method == 'POST':
         username = request.form.get('username', '')
         password = request.form.get('password', '')
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+        # Always run the hash check, even when the username is wrong, so the
+        # response time does not reveal whether the username exists.
+        password_ok = check_password_hash(ADMIN_PASSWORD_HASH, password)
+        if username == ADMIN_USERNAME and password_ok:
             session['admin_logged_in'] = True
+            logger.info('[Auth] Dashboard login succeeded.')
             return redirect(url_for('dashboard'))
-        error = 'Invalid username or password'
+        logger.warning('[Auth] Failed dashboard login attempt.')
+        # 401 rather than 200 so the failure actually counts toward the rate
+        # limit; the browser still renders the page normally.
+        return render_template('login.html', error='Invalid username or password'), 401
     return render_template('login.html', error=error)
 
 
@@ -342,40 +463,73 @@ def _verify_token(req) -> tuple:
         raise ValueError('Invalid token.')
 
 
+MIN_PASSWORD_LENGTH = 8
+
+
 @app.route('/api/auth/signup', methods=['POST'])
+@rate_limit(10, 900, scope='signup')
 def auth_signup():
     """
     Register a new app account.
-    Accepts: { "device_id": "KAVACH-001", "role": "user"|"guardian", "password": "..." }
-    Each device_id can have one user account and one guardian account.
+
+    Accepts: { "device_id", "role": "user"|"guardian", "password", "pairing_code" }
+
+    The pairing code is what proves the caller actually has access to this
+    device. Without it, anyone who guessed a device ID could register as its
+    user and then redirect its emergency contacts. Find the code in the server
+    console at startup, on the admin dashboard, or in the Pi's console.
     """
     try:
-        body = request.get_json()
+        body = request.get_json(silent=True)
         if not body:
             return jsonify({'status': 'error', 'message': 'JSON body required'}), 400
 
-        device_id = body.get('device_id', '').strip()
-        role      = body.get('role', '').strip()
-        password  = body.get('password', '')
+        device_id    = body.get('device_id', '').strip()
+        role         = body.get('role', '').strip()
+        password     = body.get('password', '')
+        pairing_code = body.get('pairing_code', '')
 
         if not device_id:
             return jsonify({'status': 'error', 'message': 'Device ID is required'}), 400
         if role not in ('user', 'guardian'):
             return jsonify({'status': 'error', 'message': 'Role must be "user" or "guardian"'}), 400
-        if not password or len(password) < 4:
-            return jsonify({'status': 'error', 'message': 'Password must be at least 4 characters'}), 400
+        if not password or len(password) < MIN_PASSWORD_LENGTH:
+            return jsonify({
+                'status': 'error',
+                'message': f'Password must be at least {MIN_PASSWORD_LENGTH} characters',
+            }), 400
+
+        # ── Proof of device ownership ────────────────────────────────────────
+        if not pairing_code:
+            return jsonify({
+                'status': 'error',
+                'message': 'A pairing code is required. Find it in the Kavach '
+                           'server console, on the dashboard, or on the device.',
+            }), 400
+
+        if not pairing.verify(device_id, pairing_code):
+            # One message for "no such device" and "wrong code" alike, so this
+            # endpoint cannot be used to discover which device IDs exist.
+            logger.warning('[Auth] Rejected signup for %s — bad pairing code.', device_id)
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid device ID or pairing code.',
+            }), 403
 
         users = _load_app_users()
         account_key = f"{device_id}_{role}"
 
         if account_key in users:
-            return jsonify({'status': 'error', 'message': f'A {role} account already exists for {device_id}. Please login instead.'}), 409
+            return jsonify({
+                'status': 'error',
+                'message': f'A {role} account already exists for {device_id}. Please login instead.',
+            }), 409
 
         users[account_key] = {
-            'device_id':    device_id,
-            'role':         role,
+            'device_id':     device_id,
+            'role':          role,
             'password_hash': _hash_password(password),
-            'created_at':   datetime.datetime.now(_IST).isoformat(),
+            'created_at':    datetime.datetime.now(_IST).isoformat(),
         }
         _save_app_users(users)
         logger.info("[Auth] New %s account registered for device %s", role, device_id)
@@ -390,18 +544,24 @@ def auth_signup():
             'device_id': device_id,
         }), 201
     except Exception as exc:
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
+        logger.error("[Auth] Signup failed: %s", exc, exc_info=True)
+        return jsonify({'status': 'error', 'message': 'Could not create the account.'}), 500
 
 
 @app.route('/api/auth/login', methods=['POST'])
+@rate_limit(10, 300, scope='login')
 def auth_login():
     """
     Login endpoint for the mobile app.
     Accepts: { "device_id": "KAVACH-001", "role": "user"|"guardian", "password": "..." }
     Returns: { "token": "...", "role": "...", "device_id": "..." }
+
+    A missing account and a wrong password produce the same 401 and the same
+    text, so this endpoint cannot be used to work out which device IDs have
+    accounts before trying passwords against them.
     """
     try:
-        body = request.get_json()
+        body = request.get_json(silent=True)
         if not body:
             return jsonify({'status': 'error', 'message': 'JSON body required'}), 400
 
@@ -417,14 +577,22 @@ def auth_login():
             return jsonify({'status': 'error', 'message': 'Password is required'}), 400
 
         users = _load_app_users()
-        account_key = f"{device_id}_{role}"
+        stored = users.get(f"{device_id}_{role}")
 
-        if account_key not in users:
-            return jsonify({'status': 'error', 'message': f'No {role} account found for {device_id}. Please sign up first.'}), 404
+        # Hash a throwaway value when the account is missing so both paths cost
+        # roughly the same time.
+        if stored is None:
+            _check_password(generate_password_hash('timing-equaliser'), password)
+            password_ok = False
+        else:
+            password_ok = _check_password(stored['password_hash'], password)
 
-        stored = users[account_key]
-        if not _check_password(stored['password_hash'], password):
-            return jsonify({'status': 'error', 'message': 'Incorrect password'}), 401
+        if not password_ok:
+            logger.warning('[Auth] Failed login for %s (%s).', device_id, role)
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid device ID, role, or password.',
+            }), 401
 
         token = _create_token(device_id, role)
         return jsonify({
@@ -434,7 +602,8 @@ def auth_login():
             'device_id': device_id,
         }), 200
     except Exception as exc:
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
+        logger.error("[Auth] Login failed: %s", exc, exc_info=True)
+        return jsonify({'status': 'error', 'message': 'Could not sign you in.'}), 500
 
 
 @app.route('/api/auth/fcm-token', methods=['PUT'])
@@ -529,6 +698,40 @@ def user_locations():
         return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
+@app.route('/api/guardian/locations', methods=['GET'])
+def guardian_locations():
+    """
+    Location history for the device this guardian monitors.
+
+    The app has always called this endpoint from the guardian map screen, but
+    it was never implemented server-side, so that screen received a 404 and
+    showed no history. Mirrors /api/user/locations with a guardian role check.
+    """
+    try:
+        device_id, role = _verify_token(request)
+        if role != 'guardian':
+            return jsonify({'status': 'error', 'message': 'Guardian role required'}), 403
+
+        alerts = (Alert.query
+                  .filter_by(device_id=device_id)
+                  .filter(Alert.gps_location.isnot(None))
+                  .order_by(Alert.id.desc())
+                  .all())
+        locations = [{
+            'alert_id':     a.id,
+            'timestamp':    a.timestamp.isoformat() if a.timestamp else None,
+            'gps_location': a.gps_location,
+            'alert_type':   a.alert_type,
+        } for a in alerts]
+
+        return jsonify({'status': 'ok', 'count': len(locations), 'locations': locations}), 200
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 401
+    except Exception as exc:
+        logger.error("Guardian locations failed: %s", exc, exc_info=True)
+        return jsonify({'status': 'error', 'message': 'Could not load locations.'}), 500
+
+
 @app.route('/api/user/config', methods=['GET'])
 def get_user_config():
     """Return the current device config (phone numbers) stored on the server."""
@@ -561,23 +764,66 @@ def update_user_config():
         if role != 'user':
             return jsonify({'status': 'error', 'message': 'User role required'}), 403
 
-        body = request.get_json()
+        body = request.get_json(silent=True)
         if not body:
             return jsonify({'status': 'error', 'message': 'JSON body required'}), 400
 
+        # ── Re-authentication ────────────────────────────────────────────────
+        # These four numbers are what the device dials in an emergency, so
+        # changing them is the single most damaging thing an account can do.
+        # A stolen or borrowed phone with a live session should not be enough;
+        # the account password has to be re-entered.
+        current_password = body.get('current_password', '')
+        if not current_password:
+            return jsonify({
+                'status': 'error',
+                'message': 'Enter your account password to change emergency contacts.',
+                'reauth_required': True,
+            }), 401
+
+        users = _load_app_users()
+        account = users.get(f"{device_id}_{role}")
+        if not account or not _check_password(account['password_hash'], current_password):
+            logger.warning('[Config] Failed re-auth on contact change for %s.', device_id)
+            return jsonify({
+                'status': 'error',
+                'message': 'Incorrect password.',
+                'reauth_required': True,
+            }), 401
+
         allowed_keys = ['police_number', 'guardian_number', 'medical_number', 'whatsapp_number']
         config = _load_device_config(device_id)
+        changes = {}
         for key in allowed_keys:
             if key in body:
                 val = str(body[key]).strip()
                 if val and not _PHONE_RE.match(val):
                     return jsonify({'status': 'error', 'message': f'Invalid phone number for {key}'}), 400
+                if val != config.get(key, ''):
+                    changes[key] = val
                 config[key] = val
         config['device_id'] = device_id
         config['updated_at'] = datetime.datetime.now(_IST).isoformat()
 
         _save_device_config(device_id, config)
-        logger.info("Config updated for device %s", device_id)
+
+        # Emergency-contact changes are security-relevant, so they are recorded
+        # distinctly rather than folded into a generic "config saved" line.
+        if changes:
+            logger.warning(
+                "[Config] EMERGENCY CONTACTS CHANGED for %s by %s: %s",
+                device_id, role, ', '.join(sorted(changes)),
+            )
+            notify_device_alerts(
+                device_id,
+                title='Emergency contacts changed — Kavach',
+                body=f"The numbers this device calls for help were updated "
+                     f"({', '.join(sorted(changes))}). If this wasn't you, "
+                     f"change them back and reset your password.",
+                data={'type': 'CONFIG_CHANGE'},
+            )
+        else:
+            logger.info("Config saved for device %s (no contact changes)", device_id)
 
         return jsonify({'status': 'ok', 'message': 'Config saved'}), 200
     except ValueError as e:
@@ -594,14 +840,55 @@ def get_device_config(device_id: str):
     if not _check_device_key():
         return jsonify({'status': 'error', 'message': 'Invalid or missing device key'}), 401
 
+    try:
+        device_id = _safe_device_id(device_id)
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
     # Capture device heartbeat (battery status)
     battery = request.headers.get('X-Battery', '')
     if battery:
         _update_device_status(device_id, battery)
         logger.debug("[Config] Heartbeat from %s — battery: %s", device_id, battery)
 
+    # A device that can present the device key is trusted to display its own
+    # pairing code, so the Pi can print it in its console for whoever is
+    # standing next to it. Creating it here means a device that has checked in
+    # even once is immediately pairable.
+    code = pairing.get_or_create(device_id)
+
     config = _load_device_config(device_id)
-    return jsonify({'status': 'ok', 'config': config}), 200
+    return jsonify({'status': 'ok', 'config': config, 'pairing_code': code}), 200
+
+
+@app.route('/api/admin/pairing-codes', methods=['GET'])
+@admin_required
+def admin_pairing_codes():
+    """Every known device's pairing code. Powers the dashboard display."""
+    return jsonify({'status': 'ok', 'codes': pairing.all_codes()}), 200
+
+
+@app.route('/api/admin/pairing-code/<device_id>', methods=['GET', 'POST'])
+@admin_required
+def admin_pairing_code(device_id: str):
+    """
+    Read (GET) or regenerate (POST) a device's pairing code.
+
+    Admin session only — this is the code that authorises creating an account
+    for the device, so it must never be readable with an app token.
+    Regenerating revokes the ability to add new accounts; existing accounts
+    are unaffected and keep logging in.
+    """
+    try:
+        device_id = _safe_device_id(device_id)
+    except ValueError as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+    if request.method == 'POST':
+        code = pairing.regenerate(device_id)
+    else:
+        code = pairing.get_or_create(device_id)
+    return jsonify({'status': 'ok', 'device_id': device_id, 'pairing_code': code}), 200
 
 
 @app.route('/api/device/status/<device_id>', methods=['GET'])
@@ -610,10 +897,12 @@ def get_device_status(device_id: str):
     Returns the live battery percentage and online/offline status for a device.
     The Pi reports battery every 60s via the config poll heartbeat.
     If no heartbeat received within 2 minutes, the device is considered offline.
-    Requires admin session or Bearer token.
+    Requires an admin session, or a Bearer token issued for this same device.
     """
     if not _check_any_auth():
         return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
+    if not _authorize_device(device_id):
+        return jsonify({'status': 'error', 'message': 'Access denied — wrong device'}), 403
     info = _get_device_status(device_id)
     return jsonify({'status': 'ok', **info}), 200
 
@@ -634,20 +923,24 @@ def guardian_evidence(alert_id: int):
         if alert.alert_type not in ('SOS', 'MEDICAL'):
             return jsonify({'status': 'error', 'message': 'Evidence only available for SOS/MEDICAL alerts'}), 403
 
+        # Read the file list from the Evidence table rather than from the
+        # comma-joined Alert.uploaded_files string. The table has one row per
+        # file, so it is immune to the separator bug that used to fuse two
+        # filenames into one — and it also recovers alerts whose string field
+        # was corrupted before that bug was fixed.
         evidence = []
-        if alert.uploaded_files:
-            for fname in alert.uploaded_files.split(','):
-                fname = fname.strip()
-                if not fname:
-                    continue
-                fpath = os.path.join(UPLOAD_DIR, fname)
-                dl_token = _create_download_token(fname)
-                evidence.append({
-                    'filename':        fname,
-                    'url':             f'/uploads/{fname}?token={dl_token}',
-                    'file_exists':     os.path.exists(fpath),
-                    'file_size_bytes': os.path.getsize(fpath) if os.path.exists(fpath) else 0,
-                })
+        for ev in alert.evidence_files.order_by(Evidence.created_at).all():
+            fpath = os.path.join(UPLOAD_DIR, ev.filename)
+            exists = os.path.exists(fpath)
+            dl_token = _create_download_token(ev.filename, alert.device_id)
+            evidence.append({
+                'filename':        ev.filename,
+                'url':             f'/uploads/{ev.filename}?token={dl_token}',
+                'file_type':       ev.file_type,
+                'sha256':          ev.sha256_hash,
+                'file_exists':     exists,
+                'file_size_bytes': os.path.getsize(fpath) if exists else 0,
+            })
 
         return jsonify({
             'status':     'ok',
@@ -658,7 +951,8 @@ def guardian_evidence(alert_id: int):
     except ValueError as e:
         return jsonify({'status': 'error', 'message': str(e)}), 401
     except Exception as exc:
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
+        logger.error("Guardian evidence failed: %s", exc, exc_info=True)
+        return jsonify({'status': 'error', 'message': 'Could not load evidence.'}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -800,8 +1094,13 @@ def receive_alert():
         if existing_alert:
             # Append uploaded files
             if saved_filenames:
-                prev = existing_alert.uploaded_files or ""
-                existing_alert.uploaded_files = (prev + ",".join(saved_filenames) + ",") if prev else ",".join(saved_filenames)
+                # Join with a separator between the old list and the new one.
+                # Without the comma, the last existing filename and the first
+                # new one fused into a single unusable name and both files
+                # became unreachable from the app.
+                prev = (existing_alert.uploaded_files or "").strip(",")
+                joined = ",".join(saved_filenames)
+                existing_alert.uploaded_files = f"{prev},{joined}" if prev else joined
             # Append file hashes
             if hash_summary:
                 prev_h = existing_alert.file_hashes or ""
@@ -896,34 +1195,39 @@ def receive_alert():
 @app.route('/api/health', methods=['GET'])
 def health():
     try:
-        total_alerts  = Alert.query.count()
-        latest_alert  = Alert.query.order_by(Alert.id.desc()).first()
-        latest_id     = latest_alert.id        if latest_alert else None
-        latest_device = latest_alert.device_id if latest_alert else None
-        latest_time   = (
-            latest_alert.timestamp.isoformat()
-            if latest_alert and latest_alert.timestamp
-            else None
-        )
         uptime_seconds = int(
             (datetime.datetime.now(_IST) - _SERVER_START_TIME).total_seconds()
         )
-        return jsonify({
-            'status':        'ok',
-            'server':        'Kavach API',
-            'version':       '4.0',
+        # Reachable without authentication, because the app uses it as a
+        # connectivity probe before login. So it reports only liveness — no
+        # device IDs, no alert counts, no filesystem paths. Authenticated
+        # callers get the detail they used to find here.
+        payload = {
+            'status':         'ok',
+            'server':         'Kavach API',
+            'version':        '4.2',
             'uptime_seconds': uptime_seconds,
-            'uptime_human':  _format_uptime(uptime_seconds),
-            'database': {
-                'status':              'connected',
-                'total_alerts':        total_alerts,
-                'latest_alert_id':     latest_id,
-                'latest_alert_device': latest_device,
-                'latest_alert_time':   latest_time,
-            },
-            'upload_dir':       UPLOAD_DIR,
-            'upload_dir_exists': os.path.isdir(UPLOAD_DIR),
-        }), 200
+            'uptime_human':   _format_uptime(uptime_seconds),
+            'database':       {'status': 'connected'},
+        }
+
+        if _is_admin():
+            latest_alert = Alert.query.order_by(Alert.id.desc()).first()
+            payload['database'].update({
+                'total_alerts':        Alert.query.count(),
+                'latest_alert_id':     latest_alert.id if latest_alert else None,
+                'latest_alert_device': latest_alert.device_id if latest_alert else None,
+                'latest_alert_time': (
+                    latest_alert.timestamp.isoformat()
+                    if latest_alert and latest_alert.timestamp else None
+                ),
+            })
+            payload['upload_dir'] = UPLOAD_DIR
+            payload['upload_dir_exists'] = os.path.isdir(UPLOAD_DIR)
+
+        # Confirm the database really answers, without exposing what is in it.
+        DB.session.execute(DB.text('SELECT 1'))
+        return jsonify(payload), 200
     except Exception as exc:
         logger.error("Health check failed: %s", exc, exc_info=True)
         return jsonify({'status': 'error', 'message': str(exc)}), 500
@@ -968,6 +1272,22 @@ def list_alerts():
         # Clamp to valid range
         limit = max(1, min(parsed_limit, 200))
         query = Alert.query.order_by(Alert.id.desc())
+
+        # The admin dashboard may look across devices; an app token may not.
+        # For a token, the device filter is forced to its own device rather
+        # than taken from the query string.
+        if not _is_admin():
+            identity = _token_identity()
+            if identity is None:
+                return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
+            token_device, _role = identity
+            if device_id and device_id != token_device:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Access denied — you can only view your own device.',
+                }), 403
+            device_id = token_device
+
         if device_id:
             query = query.filter_by(device_id=device_id)
         alerts = query.limit(limit).all()
@@ -993,6 +1313,11 @@ def get_alert(alert_id: int):
         # db.session.get() is the correct SQLAlchemy 2.x API
         alert = DB.session.get(Alert, alert_id)
         if not alert:
+            return jsonify({'status': 'error', 'message': 'Alert not found'}), 404
+
+        # Same 404 for "does not exist" and "belongs to someone else", so
+        # walking the integer IDs reveals nothing about other devices.
+        if not _authorize_device(alert.device_id):
             return jsonify({'status': 'error', 'message': 'Alert not found'}), 404
 
         data = _alert_to_dict(alert)
@@ -1025,7 +1350,7 @@ def get_alert(alert_id: int):
                 stored_hash  = stored_hashes.get(fname)
                 verified     = (current_hash == stored_hash) if stored_hash else None
                 file_size    = os.path.getsize(fpath)
-                dl_token     = _create_download_token(fname)
+                dl_token     = _create_download_token(fname, alert.device_id)
                 public_url   = f"/uploads/{fname}?token={dl_token}"
 
                 evidence_verification.append({
@@ -1075,13 +1400,32 @@ def _alert_to_dict(alert: Alert) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/uploads/<path:filename>')
 def uploaded_file(filename):
-    """Serve evidence files. Requires one of:
-      1. Admin session (dashboard), OR
-      2. Valid Bearer token (mobile app), OR
-      3. Signed ?token= query parameter (time-limited download link).
     """
-    if not (_check_any_auth() or _verify_download_token(filename)):
+    Serve an evidence file to someone entitled to it.
+
+    Three ways in, all of them scoped to the device that owns the file:
+      1. Admin session (dashboard) — cross-device by design.
+      2. Bearer token issued for the owning device.
+      3. Signed ?token= link, which carries the filename and the owning
+         device inside the signature.
+
+    A valid token for some *other* device is not enough. That was the hole
+    that let any account download every household's recordings.
+    """
+    if _verify_download_token(filename):
+        return send_from_directory(UPLOAD_DIR, filename)
+
+    if not _check_any_auth():
         return jsonify({'status': 'error', 'message': 'Authentication required'}), 401
+
+    owner = _device_id_for_filename(filename)
+    if owner is None:
+        # Unknown file: only the admin may probe for it.
+        if not _is_admin():
+            return jsonify({'status': 'error', 'message': 'File not found'}), 404
+    elif not _authorize_device(owner):
+        return jsonify({'status': 'error', 'message': 'File not found'}), 404
+
     return send_from_directory(UPLOAD_DIR, filename)
 
 
@@ -1144,8 +1488,13 @@ if __name__ == '__main__':
     with app.app_context():
         DB.create_all()
 
+    # Show any credentials generated on this boot, exactly once, plus the
+    # pairing codes needed to create app accounts.
+    secrets_manager.print_banner(KAVACH_DEVICE_KEY)
+    pairing.print_banner()
+
     logger.info("=" * 60)
-    logger.info(" Kavach Server v4.1 starting")
+    logger.info(" Kavach Server v4.2 starting")
     logger.info(" Database: kavach.db")
     logger.info(" Upload dir: %s", UPLOAD_DIR)
     logger.info(" FCM: %s", "configured" if os.environ.get('FIREBASE_CREDENTIALS') else "stub mode")

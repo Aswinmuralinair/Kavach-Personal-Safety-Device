@@ -2,6 +2,12 @@
 
 Kavach is a Raspberry Pi-based personal safety device that detects emergencies (falls, heart rate spikes, danger sounds, button presses) and automatically calls the police/ambulance, sends SMS with GPS location to your guardian, and uploads encrypted evidence to a server.
 
+> ### Setting this up for the first time?
+>
+> **Read [SETUP.md](../SETUP.md)** in the repository root — the complete, ordered
+> walkthrough for all three parts, plus how to run everything on one laptop with
+> no Raspberry Pi. Security model and known gaps: [SECURITY.md](../SECURITY.md).
+
 ## Architecture
 
 The project has two parts that run on separate machines:
@@ -183,7 +189,7 @@ ngrok http --domain your-name.ngrok-free.dev 8080
 
 ### 4. Edit config.json (on the Pi)
 
-Open `Personal-Safety-Device-main/config.json`:
+Copy `config.example.json` to `config.json`, then open it:
 
 ```json
 {
@@ -199,8 +205,8 @@ Open `Personal-Safety-Device-main/config.json`:
   "evidence_dir": "evidence",
   "whatsapp_number": "+919876543210",
   "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY",
-  "api_token": "YOUR_UNWIREDLABS_API_TOKEN",
-  "device_key": "kavach-device-key-2026"
+  "api_token": "YOUR_UNWIREDLABS_TOKEN",
+  "device_key": "SET_BY_SERVER_ON_FIRST_RUN"
 }
 ```
 
@@ -212,7 +218,17 @@ Replace:
 - `whatsapp_number` — your WhatsApp number with country code (for alerts)
 - `whatsapp_apikey` — your CallMeBot API key (see WhatsApp setup in Features section)
 - `api_token` — your Unwired Labs API token (sign up free at [unwiredlabs.com](https://unwiredlabs.com), get 100 requests/day)
-- `device_key` — must match the server's `KAVACH_DEVICE_KEY` env var (default: `kavach-device-key-2026`)
+- `device_key` — leave it alone. The server generates this on its first run and writes it
+  into `config.json` for you when both folders sit side by side. If your Pi is a separate
+  machine, copy the value the server prints in its startup banner.
+
+> **`config.json` is not in the repository and must never be committed.** It holds the
+> device key, your API tokens and real phone numbers. Create it from the template:
+>
+> ```bash
+> cd Personal-Safety-Device-main
+> cp config.example.json config.json
+> ```
 
 ### 5. Download the Audio AI Model (on the Pi, once)
 

@@ -1,8 +1,10 @@
 # Databases
 *.db
 
-# Config with secrets
-#config.json
+# Config with secrets - contains device_key, API tokens and the
+# emergency phone numbers. NEVER commit this. Start from
+# config.example.json instead.
+config.json
 
 # Encryption keys
 keys/

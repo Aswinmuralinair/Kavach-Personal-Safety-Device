@@ -1,0 +1,16 @@
+{
+  "device_id": "KAVACH-001",
+  "serial_port": "/dev/ttyUSB3",
+  "baud_rate": 115200,
+  "sos_button_pin": 23,
+  "police_number": "100",
+  "guardian_number": "+91XXXXXXXXXX",
+  "medical_number": "108",
+  "server_url": "https://YOUR-SUBDOMAIN.ngrok-free.dev/api/alerts",
+  "server_public_url": "https://YOUR-SUBDOMAIN.ngrok-free.dev/uploads/",
+  "evidence_dir": "evidence",
+  "whatsapp_number": "+91XXXXXXXXXX",
+  "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY",
+  "api_token": "YOUR_UNWIREDLABS_TOKEN",
+  "device_key": "SET_BY_SERVER_ON_FIRST_RUN"
+}

@@ -382,6 +382,7 @@
 
     // ── Store alerts globally for detail lookups ─────────
     let allAlerts = [];
+    let pairingCodes = {};   // device_id -> pairing code, for the app signup flow
 
     // ── Helpers ──────────────────────────────────────────
     function formatTime(iso) {
@@ -558,6 +559,10 @@
                     </span>
                 </div>
                 <div class="device-meta">
+                    ${pairingCodes[did] ? `<span title="Enter this in the Kavach app when signing up. Click to copy."
+                        onclick="event.stopPropagation();copyPairing('${esc(did)}')"
+                        style="cursor:pointer;font-family:ui-monospace,Consolas,monospace;letter-spacing:1px;color:var(--accent,#0891b2);border:1px solid currentColor;padding:1px 6px;border-radius:4px;">
+                        &#128273; ${esc(pairingCodes[did])}</span>` : ''}
                     <span>${typeBadge('SOS')} ${sosCount}</span>
                     <span>${typeBadge('MEDICAL')} ${medCount}</span>
                     <span>&#128267; ${lastBattery != null ? esc(lastBattery) : 'N/A'}</span>
@@ -606,6 +611,20 @@
     }
 
     // ── Fetch & Render ───────────────────────────────────
+    async function copyPairing(deviceId) {
+        const code = pairingCodes[deviceId];
+        if (!code) return;
+        try {
+            await navigator.clipboard.writeText(code);
+            alert('Pairing code for ' + deviceId + ' copied: ' + code +
+                  '
+
+Enter this in the Kavach app when creating the account.');
+        } catch (_) {
+            alert('Pairing code for ' + deviceId + ': ' + code);
+        }
+    }
+
     async function loadAlerts() {
         try {
             const res = await fetch('/api/alerts?limit=200');
@@ -614,6 +633,16 @@
             if (data.status !== 'ok') return;
 
             allAlerts = data.alerts;
+
+            // Pairing codes: needed to create an app account for a device.
+            // Non-fatal if it fails — the cards just omit the code.
+            try {
+                const pres = await fetch('/api/admin/pairing-codes');
+                if (pres.ok) {
+                    const pdata = await pres.json();
+                    if (pdata.status === 'ok') pairingCodes = pdata.codes || {};
+                }
+            } catch (_) { /* dashboard still works without codes */ }
 
             // Stats
             document.getElementById('statTotal').textContent = allAlerts.length;

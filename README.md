@@ -2,6 +2,17 @@
 
 Kavach is a Raspberry Pi-based personal safety device that detects emergencies (falls, heart rate spikes, danger sounds, button presses) and automatically calls the police/ambulance, sends SMS with GPS location to your guardian, and uploads encrypted evidence to a server.
 
+> ### Setting this up for the first time?
+>
+> **Read [SETUP.md](SETUP.md).** It is the complete, ordered walkthrough —
+> encryption key, server, device, app, and how to verify it all works. It also
+> lists what is deliberately incomplete, so there are no surprises during a demo.
+>
+> No Raspberry Pi? [SETUP.md](SETUP.md) has a section on running the whole
+> system on one laptop with simulated sensors.
+>
+> For the security model and its known limitations, see [SECURITY.md](SECURITY.md).
+
 ## Architecture
 
 The project has two parts that run on separate machines:
@@ -199,8 +210,8 @@ Open `Personal-Safety-Device-main/config.json`:
   "evidence_dir": "evidence",
   "whatsapp_number": "+919876543210",
   "whatsapp_apikey": "YOUR_CALLMEBOT_APIKEY",
-  "api_token": "YOUR_UNWIREDLABS_API_TOKEN",
-  "device_key": "kavach-device-key-2026"
+  "api_token": "YOUR_UNWIREDLABS_TOKEN",
+  "device_key": "SET_BY_SERVER_ON_FIRST_RUN"
 }
 ```
 
@@ -212,7 +223,18 @@ Replace:
 - `whatsapp_number` — your WhatsApp number with country code (for alerts)
 - `whatsapp_apikey` — your CallMeBot API key (see WhatsApp setup in Features section)
 - `api_token` — your Unwired Labs API token (sign up free at [unwiredlabs.com](https://unwiredlabs.com), get 100 requests/day)
-- `device_key` — must match the server's `KAVACH_DEVICE_KEY` env var (default: `kavach-device-key-2026`)
+- `device_key` — leave it alone. The server generates this on its first run and
+  writes it into `config.json` for you when both folders sit side by side. If your
+  Pi is a separate machine, copy the value the server prints in its startup banner.
+
+> **`config.json` is not in the repository and must never be committed.** It holds
+> the device key, your API tokens and real phone numbers. Create it by copying the
+> template:
+>
+> ```bash
+> cd Personal-Safety-Device-main
+> cp config.example.json config.json
+> ```
 
 ### 5. Download the Audio AI Model (on the Pi, once)
 
@@ -250,6 +272,18 @@ Any sensor not connected will be automatically replaced by a simulator — the d
 ---
 
 ## Running the Project
+
+### Create the App Accounts (first time only)
+
+Each device supports one **user** account and one **guardian** account. Both need
+the device's **pairing code**:
+
+- the device prints it in its console a few seconds after starting
+- the server prints all known codes at startup
+- the admin dashboard shows it on each device card — click to copy
+
+In the app: **Sign Up** → enter the Device ID → pick your role → enter the pairing
+code → choose a password of at least 8 characters.
 
 ### Build the Mobile App (on Windows PC — one time)
 
@@ -471,11 +505,19 @@ During SOS and MEDICAL alerts:
 - **Evidence integrity** — SHA-256 hashes of original files sent alongside; server verifies after decryption
 - **Live re-verification** — Server re-computes hashes on demand when viewing an alert detail
 - **No plaintext in transit** — GPS coordinates, alert type, battery status, AND evidence files are all encrypted
-- **Authenticated API** — All data routes require admin session, Bearer token, or device key (no public access to alerts, evidence, or config)
-- **Signed download URLs** — Evidence file links include a 1-hour signed token so the app can open files in the browser without exposing raw `/uploads/` paths
-- **Device key auth** — Pi authenticates to the server via `X-Device-Key` header when polling config
+- **Device pairing codes** — Creating an app account requires the device's 8-character pairing code, visible only from the device console, the server console, or the admin dashboard. Guessing a device ID is no longer enough to claim someone's device.
+- **Per-device authorization** — An app token can only ever read its own device's alerts, locations, evidence, and status. The admin dashboard is cross-device by design; app accounts are not. Records belonging to another device answer `404`, so sequential IDs reveal nothing.
+- **Re-auth on emergency contacts** — Changing the numbers the device dials requires the account password again, even with a valid session. The change is logged on both server and device and written to `contact_changes.log`.
+- **Generated credentials** — No password or key is hard-coded. The server generates them on first boot, stores only hashes where it can, and prints them once.
+- **Signed download URLs** — Evidence links carry a 1-hour signed token binding both the filename and the owning device, so a leaked link is useless against another household's files.
+- **Device key auth** — Pi authenticates via a constant-time `X-Device-Key` comparison when polling config
+- **Brute-force protection** — Login, signup and the dashboard throttle after ten *failed* attempts; successes never count and clear the counter
 - **Cell tower fallback** — Even without GPS, approximate location is obtained via cell tower triangulation
 - **Persistent auth tokens** — Server SECRET_KEY saved to `.secret_key` file, survives restarts
+
+**Known limitations are documented honestly in [SECURITY.md](SECURITY.md)** — including
+the fact that the evidence ledger detects corruption rather than tampering, and that the
+forward-secrecy ratchet is measured but not yet in the live upload path.
 
 ---
 
