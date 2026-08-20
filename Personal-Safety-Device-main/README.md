@@ -293,7 +293,7 @@ This single command will:
 4. Launch ngrok tunnel automatically
 5. Open the dashboard in your browser
 
-**Admin Login:** Username `admin`, Password `kavach2026`. Change via environment variables `KAVACH_ADMIN_USER` and `KAVACH_ADMIN_PASS`.
+**Admin Login:** The server generates its own username and password on first run and prints them once in the startup banner — save them then. To choose your own instead, set `KAVACH_ADMIN_USER` and `KAVACH_ADMIN_PASS` before starting. There is no default password.
 
 Verify: open `https://your-name.ngrok-free.dev/` in your browser — you'll see the login page. After logging in, you'll see the admin dashboard with map, stats, alerts, and evidence files.
 
@@ -344,7 +344,7 @@ Keyboard shortcuts (works on Pi and desktop):
 | 11 | **Long press** to cancel | |
 | 12 | **Double tap** the button quickly | MEDICAL alert: calls medical number |
 | 13 | **Long press** to cancel | |
-| 14 | Open `https://your-name.ngrok-free.dev/` | Login with admin/kavach2026, show dashboard with map, stats, alerts, and evidence gallery |
+| 14 | Open `https://your-name.ngrok-free.dev/` | Login with the credentials from the server's first-run banner; show dashboard with map, stats, alerts, and evidence gallery |
 | 15 | Open `https://your-name.ngrok-free.dev/api/alerts/1` in same browser (admin session) | Show SHA-256 hash verification of evidence |
 | 16 | Click an evidence link from the dashboard or alert detail | Evidence served via signed download URL (requires auth) |
 
@@ -496,7 +496,7 @@ During SOS and MEDICAL alerts:
 
 | # | Change | Details |
 |---|--------|---------|
-| 1 | Admin login required for dashboard | Username/password authentication. Default: `admin`/`kavach2026`. Configurable via env vars |
+| 1 | Admin login required for dashboard | Username/password authentication. Credentials are generated on first run and stored hashed — no default password. Override with `KAVACH_ADMIN_USER` / `KAVACH_ADMIN_PASS` |
 | 2 | Dark theme dashboard | Redesigned with dark theme, cyan accents, Active Devices panel with expandable alerts |
 | 3 | Evidence per alert | Evidence files shown inline per alert (click device → expand alerts → click alert → see evidence) |
 | 4 | One-click `start.bat` launcher | Creates venv, installs deps, starts Flask + ngrok + opens browser automatically |
@@ -545,7 +545,7 @@ During SOS and MEDICAL alerts:
 |---|--------|---------|
 | 1 | **Server route authentication** | `GET /api/alerts`, `/api/alerts/<id>` now require admin session or Bearer token. `GET /uploads/<file>` requires session, token, or signed download URL. `GET /api/device/config/<id>` requires `X-Device-Key` header. No data routes are publicly accessible |
 | 2 | **Signed evidence download URLs** | Evidence URLs returned by the API include a 1-hour signed token (`?token=xxx`). Allows the app to open files in an external browser without needing auth headers |
-| 3 | **Device key authentication** | Pi sends `X-Device-Key` header when polling `/api/device/config`. Server validates against `KAVACH_DEVICE_KEY` env var (default: `kavach-device-key-2026`). Added `device_key` field to `config.json` |
+| 3 | **Device key authentication** | Pi sends `X-Device-Key` header when polling `/api/device/config`. Server compares it in constant time against a key generated on first run and synced into the device's `config.json` automatically. Override with `KAVACH_DEVICE_KEY` |
 | 4 | **Battery heartbeat** | Pi sends `X-Battery` header (e.g. `85%`) with every config poll (every 10s). Server stores battery + last-seen timestamp in memory per device |
 | 5 | **Live device status endpoint** | New `GET /api/device/status/<device_id>` returns battery percentage + online/offline. Device is "offline" if no heartbeat in 2 minutes |
 | 6 | **Live battery on app dashboard** | User dashboard now shows "Device Online/Offline" with live battery percentage instead of server uptime. Polls every 60 seconds. Shows "No heartbeat received" when device is offline |
